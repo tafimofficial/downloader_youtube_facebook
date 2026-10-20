@@ -1,0 +1,7 @@
+{
+  "name": "com.tafim.downloader",
+  "description": "Tafim Internet Download Manager Host",
+  "path": "C:\\Users\\T\\Downloads\\reverse\\new idm\\TafimHost.exe",
+  "type": "stdio",
+  "allowed_origins": [ "chrome-extension://*/*" ]
+}
