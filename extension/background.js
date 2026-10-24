@@ -37,6 +37,41 @@ const CATCH_MIMES = [
   'audio/flac'
 ];
 
+async function getCookiesForUrl(targetUrl) {
+  if (!targetUrl || targetUrl.startsWith('blob:') || targetUrl.startsWith('data:') || targetUrl.startsWith('filesystem:')) return '';
+  try {
+    const cookies = await chrome.cookies.getAll({ url: targetUrl });
+    const cookieMap = new Map();
+    cookies.forEach(c => cookieMap.set(c.name, c.value));
+
+    // For Google Drive / Usercontent, include domain-level google cookies
+    if (targetUrl.includes('google.com') || targetUrl.includes('googleusercontent.com')) {
+      try {
+        const extra = await chrome.cookies.getAll({ domain: '.google.com' });
+        extra.forEach(c => {
+          if (!cookieMap.has(c.name)) cookieMap.set(c.name, c.value);
+        });
+      } catch (_) {}
+    }
+    // For ChatGPT / OpenAI
+    if (targetUrl.includes('openai.com') || targetUrl.includes('chatgpt.com') || targetUrl.includes('oaiusercontent.com')) {
+      try {
+        const extra = await chrome.cookies.getAll({ domain: '.chatgpt.com' });
+        extra.forEach(c => {
+          if (!cookieMap.has(c.name)) cookieMap.set(c.name, c.value);
+        });
+      } catch (_) {}
+    }
+
+    const pairs = [];
+    cookieMap.forEach((v, k) => pairs.push(`${k}=${v}`));
+    return pairs.join('; ');
+  } catch (err) {
+    console.warn('[Tafim] Failed to get cookies:', err);
+    return '';
+  }
+}
+
 // Context Menu: "Download with Tafim"
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -46,10 +81,12 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const url = info.linkUrl || info.srcUrl;
   if (url) {
-    sendDownloadToTafim(url, '', info.pageUrl || tab?.url || '');
+    if (url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('filesystem:')) return;
+    const cookies = await getCookiesForUrl(url);
+    sendDownloadToTafim(url, '', info.pageUrl || tab?.url || '', navigator.userAgent, cookies);
   }
 });
 
@@ -60,47 +97,78 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     return;
   }
 
+  const rawUrl = item.finalUrl || item.url || '';
+  // Never intercept or cancel in-memory browser-generated blobs or data URLs!
+  // (e.g. ChatGPT PDF/client-side exports, canvas downloads, HTML-to-PDF)
+  if (!rawUrl || rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || rawUrl.startsWith('filesystem:')) {
+    suggest();
+    return;
+  }
+
   const filename = (item.filename || '').toLowerCase();
-  const url = (item.finalUrl || item.url || '').toLowerCase();
+  const urlLower = rawUrl.toLowerCase();
   const mime = (item.mime || '').toLowerCase();
 
   const extMatch = CATCH_EXTENSIONS.some(ext =>
     filename.endsWith(ext) ||
-    url.endsWith(ext) ||
-    url.includes(ext + '?') ||
-    url.includes(ext + '&')
+    urlLower.endsWith(ext) ||
+    urlLower.includes(ext + '?') ||
+    urlLower.includes(ext + '&')
   );
 
   const mimeMatch = CATCH_MIMES.some(m => mime.includes(m));
+  const isCloudDownload = rawUrl.includes('drive.google.com') ||
+                          rawUrl.includes('drive.usercontent.google.com') ||
+                          rawUrl.includes('docs.google.com') ||
+                          rawUrl.includes('dropbox.com') ||
+                          rawUrl.includes('mediafire.com') ||
+                          rawUrl.includes('oaiusercontent.com');
 
-  if (extMatch || mimeMatch) {
-    console.log('[Tafim] Intercepting download:', item.filename, item.url);
+  if (extMatch || mimeMatch || isCloudDownload) {
+    console.log('[Tafim] Intercepting download:', item.filename, rawUrl);
 
-    chrome.downloads.cancel(item.id, () => {
-      chrome.downloads.erase({ id: item.id }, () => {});
-    });
+    (async () => {
+      let cookies = '';
+      try {
+        cookies = await getCookiesForUrl(rawUrl);
+      } catch (_) {}
 
-    const targetUrl = item.finalUrl || item.url;
-    sendDownloadToTafim(targetUrl, item.filename, item.referrer || '');
-    return;
+      const success = await sendDownloadToTafim(rawUrl, item.filename, item.referrer || '', navigator.userAgent, cookies);
+      if (success) {
+        chrome.downloads.cancel(item.id, () => {
+          chrome.downloads.erase({ id: item.id }, () => {});
+        });
+      } else {
+        // Fallback: If Tafim is not running or rejected, allow Chrome native download
+        suggest();
+      }
+    })();
+    return true; // Keep suggest callback active for async resolution
   }
 
   suggest();
 });
 
 // Secondary Fallback: onCreated
-chrome.downloads.onCreated.addListener((item) => {
-  if (!item.url || item.url.startsWith('blob:') || item.url.startsWith('data:')) return;
+chrome.downloads.onCreated.addListener(async (item) => {
+  if (!item.url || item.url.startsWith('blob:') || item.url.startsWith('data:') || item.url.startsWith('filesystem:')) return;
   if (item.byExtensionId === chrome.runtime.id) return;
 
   const urlLower = item.url.toLowerCase();
   const directMatch = CATCH_EXTENSIONS.some(ext => urlLower.endsWith(ext));
 
   if (directMatch) {
-    chrome.downloads.cancel(item.id, () => {
-      chrome.downloads.erase({ id: item.id }, () => {});
-    });
-    sendDownloadToTafim(item.url, item.filename || '', item.referrer || '');
+    let cookies = '';
+    try {
+      cookies = await getCookiesForUrl(item.url);
+    } catch (_) {}
+
+    const success = await sendDownloadToTafim(item.url, item.filename || '', item.referrer || '', navigator.userAgent, cookies);
+    if (success) {
+      chrome.downloads.cancel(item.id, () => {
+        chrome.downloads.erase({ id: item.id }, () => {});
+      });
+    }
   }
 });
 
@@ -393,9 +461,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'triggerDownload') {
-    sendDownloadToTafim(msg.url, msg.filename, msg.pageUrl || sender.tab?.url || '', msg.userAgent, msg.cookies, msg.audioUrl, msg.isDash, msg.qualityHeight)
-      .then(ok => sendResponse({ success: ok }))
-      .catch(() => sendResponse({ success: false }));
+    (async () => {
+      let cookies = msg.cookies || '';
+      if (!cookies && msg.url) {
+        try {
+          cookies = await getCookiesForUrl(msg.url);
+        } catch (_) {}
+      }
+      const ok = await sendDownloadToTafim(msg.url, msg.filename, msg.pageUrl || sender.tab?.url || '', msg.userAgent || navigator.userAgent, cookies, msg.audioUrl, msg.isDash, msg.qualityHeight);
+      sendResponse({ success: ok });
+    })();
     return true;
   }
 });

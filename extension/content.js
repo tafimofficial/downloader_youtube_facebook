@@ -26,7 +26,10 @@
     if (!target || !target.href) return;
 
     const href = target.href.trim();
-    if (href.startsWith('javascript:') || href.startsWith('#')) return;
+    if (href.startsWith('javascript:') || href.startsWith('#') || href.startsWith('blob:') || href.startsWith('data:') || href.startsWith('filesystem:')) return;
+
+    // Only intercept network HTTP/HTTPS links
+    if (!href.startsWith('http://') && !href.startsWith('https://')) return;
 
     const hrefLower = href.toLowerCase();
     const hasDownloadAttr = target.hasAttribute('download');
