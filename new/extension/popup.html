@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tafim IDM</title>
+  <style>
+    body {
+      width: 280px;
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 10px;
+    }
+    .header h1 {
+      font-size: 14px;
+      font-weight: 700;
+      margin: 0;
+      color: #0f172a;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 14px;
+    }
+    .status-connected {
+      background: #dcfce7;
+      color: #15803d;
+    }
+    .status-disconnected {
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .setting-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      font-size: 13px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 8px 0;
+      margin-top: 14px;
+      background: #1e90ff;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.2s;
+    }
+    .btn:hover {
+      background: #0077e6;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="#1e90ff">
+      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
+    </svg>
+    <h1>Tafim IDM Integration</h1>
+  </div>
+
+  <div id="status" class="status-badge status-connected">
+    <span class="dot"></span>
+    <span id="status-text">Connected to Tafim</span>
+  </div>
+
+  <div class="setting-item">
+    <span>Capture Downloads</span>
+    <input type="checkbox" id="chkDownloads" checked>
+  </div>
+
+  <div class="setting-item">
+    <span>Show Video Panel</span>
+    <input type="checkbox" id="chkVideo" checked>
+  </div>
+
+  <button class="btn" id="btnTest">Test Connection</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,476 @@
+// Background service worker for Tafim Integration Module with DASH (Adaptive Streaming) Support
+
+const TAFIM_API = 'http://127.0.0.1:9898/download';
+
+const CATCH_EXTENSIONS = [
+  // Compressed / Archives
+  '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso', '.dmg', '.tgz', '.xz',
+  // Executables & Installers
+  '.exe', '.msi', '.apk', '.bin', '.deb', '.rpm', '.bat', '.cmd',
+  // Media (Audio / Video)
+  '.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.ogv', '.ts',
+  '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma',
+  // Documents
+  '.pdf', '.epub', '.mobi', '.docx', '.xlsx', '.pptx',
+  // Images / Disk
+  '.img', '.vhd', '.vmdk', '.torrent'
+];
+
+const CATCH_MIMES = [
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-rar-compressed',
+  'application/x-7z-compressed',
+  'application/x-tar',
+  'application/x-gzip',
+  'application/x-msdownload',
+  'application/vnd.android.package-archive',
+  'application/octet-stream',
+  'application/pdf',
+  'video/mp4',
+  'video/x-matroska',
+  'video/webm',
+  'video/quicktime',
+  'video/x-msvideo',
+  'audio/mpeg',
+  'audio/x-wav',
+  'audio/flac'
+];
+
+async function getCookiesForUrl(targetUrl) {
+  if (!targetUrl || targetUrl.startsWith('blob:') || targetUrl.startsWith('data:') || targetUrl.startsWith('filesystem:')) return '';
+  try {
+    const cookies = await chrome.cookies.getAll({ url: targetUrl });
+    const cookieMap = new Map();
+    cookies.forEach(c => cookieMap.set(c.name, c.value));
+
+    // For Google Drive / Usercontent, include domain-level google cookies
+    if (targetUrl.includes('google.com') || targetUrl.includes('googleusercontent.com')) {
+      try {
+        const extra = await chrome.cookies.getAll({ domain: '.google.com' });
+        extra.forEach(c => {
+          if (!cookieMap.has(c.name)) cookieMap.set(c.name, c.value);
+        });
+      } catch (_) {}
+    }
+    // For ChatGPT / OpenAI
+    if (targetUrl.includes('openai.com') || targetUrl.includes('chatgpt.com') || targetUrl.includes('oaiusercontent.com')) {
+      try {
+        const extra = await chrome.cookies.getAll({ domain: '.chatgpt.com' });
+        extra.forEach(c => {
+          if (!cookieMap.has(c.name)) cookieMap.set(c.name, c.value);
+        });
+      } catch (_) {}
+    }
+
+    const pairs = [];
+    cookieMap.forEach((v, k) => pairs.push(`${k}=${v}`));
+    return pairs.join('; ');
+  } catch (err) {
+    console.warn('[Tafim] Failed to get cookies:', err);
+    return '';
+  }
+}
+
+// Context Menu: "Download with Tafim"
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'tafim-download-link',
+    title: 'Download with Tafim',
+    contexts: ['link', 'image', 'video', 'audio']
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const url = info.linkUrl || info.srcUrl;
+  if (url) {
+    if (url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('filesystem:')) return;
+    const cookies = await getCookiesForUrl(url);
+    sendDownloadToTafim(url, '', info.pageUrl || tab?.url || '', navigator.userAgent, cookies);
+  }
+});
+
+// Primary Download Sniffer: onDeterminingFilename
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  if (item.byExtensionId === chrome.runtime.id) {
+    suggest();
+    return;
+  }
+
+  const rawUrl = item.finalUrl || item.url || '';
+  // Never intercept or cancel in-memory browser-generated blobs or data URLs!
+  // (e.g. ChatGPT PDF/client-side exports, canvas downloads, HTML-to-PDF)
+  if (!rawUrl || rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || rawUrl.startsWith('filesystem:')) {
+    suggest();
+    return;
+  }
+
+  const filename = (item.filename || '').toLowerCase();
+  const urlLower = rawUrl.toLowerCase();
+  const mime = (item.mime || '').toLowerCase();
+
+  const extMatch = CATCH_EXTENSIONS.some(ext =>
+    filename.endsWith(ext) ||
+    urlLower.endsWith(ext) ||
+    urlLower.includes(ext + '?') ||
+    urlLower.includes(ext + '&')
+  );
+
+  const mimeMatch = CATCH_MIMES.some(m => mime.includes(m));
+  const isCloudDownload = rawUrl.includes('drive.google.com') ||
+                          rawUrl.includes('drive.usercontent.google.com') ||
+                          rawUrl.includes('docs.google.com') ||
+                          rawUrl.includes('dropbox.com') ||
+                          rawUrl.includes('mediafire.com') ||
+                          rawUrl.includes('oaiusercontent.com');
+
+  if (extMatch || mimeMatch || isCloudDownload) {
+    console.log('[Tafim] Intercepting download:', item.filename, rawUrl);
+
+    (async () => {
+      let cookies = '';
+      try {
+        cookies = await getCookiesForUrl(rawUrl);
+      } catch (_) {}
+
+      const success = await sendDownloadToTafim(rawUrl, item.filename, item.referrer || '', navigator.userAgent, cookies);
+      if (success) {
+        chrome.downloads.cancel(item.id, () => {
+          chrome.downloads.erase({ id: item.id }, () => {});
+        });
+      } else {
+        // Fallback: If Tafim is not running or rejected, allow Chrome native download
+        suggest();
+      }
+    })();
+    return true; // Keep suggest callback active for async resolution
+  }
+
+  suggest();
+});
+
+// Secondary Fallback: onCreated
+chrome.downloads.onCreated.addListener(async (item) => {
+  if (!item.url || item.url.startsWith('blob:') || item.url.startsWith('data:') || item.url.startsWith('filesystem:')) return;
+  if (item.byExtensionId === chrome.runtime.id) return;
+
+  const urlLower = item.url.toLowerCase();
+  const directMatch = CATCH_EXTENSIONS.some(ext => urlLower.endsWith(ext));
+
+  if (directMatch) {
+    let cookies = '';
+    try {
+      cookies = await getCookiesForUrl(item.url);
+    } catch (_) {}
+
+    const success = await sendDownloadToTafim(item.url, item.filename || '', item.referrer || '', navigator.userAgent, cookies);
+    if (success) {
+      chrome.downloads.cancel(item.id, () => {
+        chrome.downloads.erase({ id: item.id }, () => {});
+      });
+    }
+  }
+});
+
+function sendDownloadToTafim(url, filename, pageUrl, userAgent, cookies, audioUrl, isDash, qualityHeight) {
+  console.log('[Tafim] Sending to Tafim:', url, 'audio:', audioUrl, filename);
+
+  const payload = {
+    url: url,
+    audioUrl: audioUrl || '',
+    isDash: !!isDash || !!audioUrl,
+    filename: filename,
+    pageUrl: pageUrl,
+    userAgent: userAgent || navigator.userAgent,
+    cookies: cookies || '',
+    qualityHeight: qualityHeight || 0
+  };
+
+  // 1. Send to local HTTP API (immediate dispatch to active Tafim.exe)
+  return sendHttpToTafim(payload).then(httpSuccess => {
+    if (httpSuccess) return true;
+
+    // 2. Fallback: Also try Native Messaging Host (will launch Tafim if not active)
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendNativeMessage('com.tafim.downloader', payload, (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            resolve(false);
+          } else {
+            resolve(true);
+          }
+        });
+      } catch (_) {
+        resolve(false);
+      }
+    });
+  });
+}
+
+function sendHttpToTafim(payload) {
+  return fetch(TAFIM_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(res => res.json())
+    .then(data => {
+      console.log('[Tafim] HTTP API success:', data);
+      return data.success === true;
+    })
+    .catch(err => {
+      console.warn('[Tafim] HTTP API failed. Is Tafim running?', err);
+      return false;
+    });
+}
+
+// Media Sniffing Engine for Streaming Video & Audio (DASH support for YouTube, Facebook, etc.)
+const capturedMediaByTab = new Map(); // tabId -> Map(url -> mediaItem)
+const capturedAudioByTab = new Map(); // tabId -> { url, itag, mime, timestamp }
+
+function cleanStreamUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    [
+      'range', 'bytestart', 'byteend', 'ump', 'rn', 'rbuf', 'sq',
+      'alr', 'srfvp', 'begin', 'len', 'cmo'
+    ].forEach((key) => u.searchParams.delete(key));
+    return u.toString();
+  } catch (_) {
+    return rawUrl;
+  }
+}
+
+const ITAG_MAP = {
+  '18': { container: 'MP4 file', quality: 'quality 360p', height: 360, isDash: false },
+  '22': { container: 'MP4 file', quality: 'quality 720p HD', height: 720, isDash: false },
+  '137': { container: 'MP4 file', quality: 'quality 1080p', height: 1080, isDash: true },
+  '299': { container: 'MP4 file', quality: 'quality 1080p60', height: 1080, isDash: true },
+  '248': { container: 'WebM file', quality: 'quality 1080p', height: 1080, isDash: true },
+  '303': { container: 'WebM file', quality: 'quality 1080p60', height: 1080, isDash: true },
+  '136': { container: 'MP4 file', quality: 'quality 720p', height: 720, isDash: true },
+  '298': { container: 'MP4 file', quality: 'quality 720p60', height: 720, isDash: true },
+  '247': { container: 'WebM file', quality: 'quality 720p', height: 720, isDash: true },
+  '302': { container: 'WebM file', quality: 'quality 720p60', height: 720, isDash: true },
+  '135': { container: 'MP4 file', quality: 'quality 480p', height: 480, isDash: true },
+  '244': { container: 'WebM file', quality: 'quality 480p', height: 480, isDash: true },
+  '134': { container: 'MP4 file', quality: 'quality 360p', height: 360, isDash: true },
+  '243': { container: 'WebM file', quality: 'quality 360p', height: 360, isDash: true },
+  '133': { container: 'MP4 file', quality: 'quality 240p', height: 240, isDash: true },
+  '242': { container: 'WebM file', quality: 'quality 240p', height: 240, isDash: true },
+  '160': { container: 'MP4 file', quality: 'quality 144p', height: 144, isDash: true },
+  '278': { container: 'WebM file', quality: 'quality 144p', height: 144, isDash: true },
+  '140': { container: 'M4A Audio file', quality: 'quality 128k', isAudio: true },
+  '141': { container: 'M4A Audio file', quality: 'quality 256k', isAudio: true },
+  '251': { container: 'WebM Audio file', quality: 'quality 160k', isAudio: true },
+  '250': { container: 'WebM Audio file', quality: 'quality 70k', isAudio: true },
+  '249': { container: 'WebM Audio file', quality: 'quality 50k', isAudio: true },
+  '313': { container: 'WebM file', quality: 'quality 2160p 4K', height: 2160, isDash: true },
+  '315': { container: 'WebM file', quality: 'quality 2160p60 4K', height: 2160, isDash: true },
+  '271': { container: 'WebM file', quality: 'quality 1440p 2K', height: 1440, isDash: true },
+  '308': { container: 'WebM file', quality: 'quality 1440p60 2K', height: 1440, isDash: true },
+  '401': { container: 'MP4 file', quality: 'quality 2160p 4K', height: 2160, isDash: true },
+  '400': { container: 'MP4 file', quality: 'quality 1440p 2K', height: 1440, isDash: true },
+  '399': { container: 'MP4 file', quality: 'quality 1080p', height: 1080, isDash: true },
+  '398': { container: 'MP4 file', quality: 'quality 720p', height: 720, isDash: true },
+  '397': { container: 'MP4 file', quality: 'quality 480p', height: 480, isDash: true },
+  '396': { container: 'MP4 file', quality: 'quality 360p', height: 360, isDash: true }
+};
+
+chrome.webRequest.onResponseStarted.addListener((details) => {
+  if (details.tabId < 0) return;
+  const url = details.url;
+
+  let isVideo = false;
+  let isAudio = false;
+  let isDash = false;
+  let container = 'MP4 file';
+  let quality = '';
+  let mime = 'video/mp4';
+  let sizeStr = '';
+  let bytes = 0;
+  let itag = null;
+  let height = 0;
+
+  // 1. YouTube googlevideo.com
+  if (url.includes('googlevideo.com/videoplayback')) {
+    try {
+      const u = new URL(url);
+      itag = u.searchParams.get('itag');
+      const clen = u.searchParams.get('clen');
+      if (clen) {
+        bytes = parseInt(clen, 10);
+        if (!isNaN(bytes) && bytes > 0) {
+          sizeStr = (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+      }
+
+      if (url.includes('mime=audio') || (itag && ITAG_MAP[itag] && ITAG_MAP[itag].isAudio) || itag === '171') {
+        isAudio = true;
+        mime = url.includes('mime=audio%2Fwebm') ? 'audio/webm' : 'audio/mp4';
+      } else if (url.includes('mime=video') || (itag && ITAG_MAP[itag] && !ITAG_MAP[itag].isAudio) || itag) {
+        isVideo = true;
+        if (itag && ITAG_MAP[itag]) {
+          container = ITAG_MAP[itag].container;
+          quality = ITAG_MAP[itag].quality;
+          isDash = ITAG_MAP[itag].isDash;
+          height = ITAG_MAP[itag].height || 0;
+        } else {
+          isDash = true;
+          quality = itag ? ('itag ' + itag) : '';
+        }
+      }
+    } catch (_) {}
+  }
+  // 2. Facebook fbcdn.net
+  else if (url.includes('fbcdn.net')) {
+    let ct = '';
+    if (details.responseHeaders) {
+      for (const h of details.responseHeaders) {
+        if (h.name.toLowerCase() === 'content-type') {
+          ct = h.value.toLowerCase();
+          break;
+        }
+      }
+    }
+    if (ct.startsWith('audio/') || url.includes('&mime=audio') || url.includes('/audio/')) {
+      isAudio = true;
+      mime = ct || 'audio/mp4';
+    } else if (ct.startsWith('video/') || url.includes('.mp4') || url.includes('bytestart=') || url.includes('/v/t')) {
+      isVideo = true;
+      isDash = true; // Modern Facebook videos use DASH separate audio
+      container = 'MP4 file';
+      quality = 'quality HD';
+      mime = ct || 'video/mp4';
+    }
+  }
+  // 3. Generic video/audio content types
+  else if (details.responseHeaders) {
+    for (const h of details.responseHeaders) {
+      if (h.name.toLowerCase() === 'content-type') {
+        const ct = h.value.toLowerCase();
+        if (ct.startsWith('video/') || ct.includes('application/dash+xml')) {
+          isVideo = true;
+          isDash = true;
+          mime = ct;
+          container = ct.includes('webm') ? 'WebM file' : 'MP4 file';
+          quality = 'quality Video Stream';
+          break;
+        } else if (ct.startsWith('audio/')) {
+          isAudio = true;
+          mime = ct;
+          break;
+        }
+      }
+    }
+  }
+
+  // Handle Audio Stream discovery
+  if (isAudio) {
+    const streamUrl = cleanStreamUrl(url);
+    capturedAudioByTab.set(details.tabId, {
+      url: streamUrl,
+      itag: itag,
+      mime: mime,
+      timestamp: Date.now()
+    });
+
+    // Retroactively update any videos on this tab with the newly discovered audio stream!
+    if (capturedMediaByTab.has(details.tabId)) {
+      const tabMedia = capturedMediaByTab.get(details.tabId);
+      for (const mediaItem of tabMedia.values()) {
+        if (mediaItem.isDash && !mediaItem.audioUrl) {
+          mediaItem.audioUrl = streamUrl;
+        }
+      }
+    }
+
+    chrome.tabs.sendMessage(details.tabId, {
+      action: 'tafimAudioDiscovered',
+      audioUrl: streamUrl,
+      itag: itag
+    }).catch(() => {});
+  }
+
+  // Handle Video Stream discovery
+  if (isVideo) {
+    // Skip tiny UMP/init packets unless clen says the real file is larger
+    if (bytes > 0 && bytes < 80 * 1024) {
+      return;
+    }
+    if (!quality) {
+      return;
+    }
+
+    const streamUrl = cleanStreamUrl(url);
+    if (!capturedMediaByTab.has(details.tabId)) {
+      capturedMediaByTab.set(details.tabId, new Map());
+    }
+    const tabMedia = capturedMediaByTab.get(details.tabId);
+
+    let audioUrl = '';
+    if (isDash && capturedAudioByTab.has(details.tabId)) {
+      audioUrl = capturedAudioByTab.get(details.tabId).url;
+    }
+
+    const mediaKey = (height > 0) ? ('h:' + height) : (itag ? ('itag:' + itag) : streamUrl);
+    if (!tabMedia.has(mediaKey)) {
+      const mediaItem = {
+        url: streamUrl,
+        audioUrl: audioUrl,
+        isDash: isDash,
+        type: mime,
+        container: container,
+        quality: quality,
+        sizeStr: sizeStr,
+        bytes: bytes,
+        itag: itag,
+        height: height,
+        timestamp: Date.now()
+      };
+      tabMedia.set(mediaKey, mediaItem);
+      chrome.tabs.sendMessage(details.tabId, {
+        action: 'tafimMediaDiscovered',
+        media: mediaItem
+      }).catch(() => {});
+    } else {
+      const existing = tabMedia.get(mediaKey);
+      if (audioUrl && !existing.audioUrl) {
+        existing.audioUrl = audioUrl;
+      }
+      if (bytes > (existing.bytes || 0)) {
+        existing.bytes = bytes;
+        existing.sizeStr = sizeStr;
+        existing.url = streamUrl;
+      }
+    }
+  }
+}, { urls: ["<all_urls>"] }, ["responseHeaders"]);
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  capturedMediaByTab.delete(tabId);
+  capturedAudioByTab.delete(tabId);
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'getCapturedMedia' && sender.tab) {
+    const tabMedia = capturedMediaByTab.get(sender.tab.id);
+    const list = tabMedia ? Array.from(tabMedia.values()) : [];
+    const curAudio = capturedAudioByTab.get(sender.tab.id);
+    sendResponse({ media: list, audio: curAudio ? curAudio.url : '' });
+    return true;
+  }
+  if (msg.action === 'triggerDownload') {
+    (async () => {
+      let cookies = msg.cookies || '';
+      if (!cookies && msg.url) {
+        try {
+          cookies = await getCookiesForUrl(msg.url);
+        } catch (_) {}
+      }
+      const ok = await sendDownloadToTafim(msg.url, msg.filename, msg.pageUrl || sender.tab?.url || '', msg.userAgent || navigator.userAgent, cookies, msg.audioUrl, msg.isDash, msg.qualityHeight);
+      sendResponse({ success: ok });
+    })();
+    return true;
+  }
+});
