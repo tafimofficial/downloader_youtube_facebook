@@ -172,7 +172,25 @@ chrome.downloads.onCreated.addListener(async (item) => {
   }
 });
 
+const recentDispatchedUrls = new Map();
+
 function sendDownloadToTafim(url, filename, pageUrl, userAgent, cookies, audioUrl, isDash, qualityHeight) {
+  if (!url) return Promise.resolve(false);
+
+  const now = Date.now();
+  if (recentDispatchedUrls.has(url)) {
+    if (now - recentDispatchedUrls.get(url) < 4000) {
+      console.log('[Tafim] Debouncing duplicate download dispatch for:', url);
+      return Promise.resolve(true);
+    }
+  }
+  recentDispatchedUrls.set(url, now);
+  if (recentDispatchedUrls.size > 100) {
+    for (const [u, t] of recentDispatchedUrls.entries()) {
+      if (now - t > 30000) recentDispatchedUrls.delete(u);
+    }
+  }
+
   console.log('[Tafim] Sending to Tafim:', url, 'audio:', audioUrl, filename);
 
   const payload = {
