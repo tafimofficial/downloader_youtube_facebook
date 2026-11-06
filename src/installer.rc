@@ -1,0 +1,32 @@
+#define IDI_APP_ICON         101
+#define IDR_BIN_TAFIM        201
+#define IDR_BIN_UNINSTALL    202
+#define IDR_BIN_HOST         203
+#define IDR_EXT_MANIFEST     204
+#define IDR_EXT_BG           205
+#define IDR_EXT_CONTENT      206
+#define IDR_EXT_CSS          207
+#define IDR_EXT_POPUP_HTML   208
+#define IDR_EXT_POPUP_JS     209
+#define IDR_EXT_ICON16       210
+#define IDR_EXT_ICON48       211
+#define IDR_EXT_ICON128      212
+#define IDR_EXT_YT_BRIDGE    213
+
+IDI_APP_ICON ICON "res\\app.ico"
+
+201 RCDATA "build\\Tafim.exe"
+202 RCDATA "build\\Uninstall.exe"
+203 RCDATA "build\\TafimHost.exe"
+204 RCDATA "extension\\manifest.json"
+205 RCDATA "extension\\background.js"
+206 RCDATA "extension\\content.js"
+207 RCDATA "extension\\content.css"
+208 RCDATA "extension\\popup.html"
+209 RCDATA "extension\\popup.js"
+210 RCDATA "extension\\icons\\icon16.png"
+211 RCDATA "extension\\icons\\icon48.png"
+212 RCDATA "extension\\icons\\icon128.png"
+213 RCDATA "extension\\yt_bridge.js"
+
+1 24 "src\\manifest.xml"

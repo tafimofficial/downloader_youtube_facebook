@@ -1,56 +1,59 @@
-Tafim Downloader
-A lightweight downloader built with C. This repository includes the
-browser extension used to connect a supported browser to the Tafim
-Downloader desktop application.
-Note: Update the download links, supported platforms, and
-connection details below to match the actual release. The README does
-not imply that an installer or extension package exists until it is
-published in Releases.
+# Tafim Internet Download Manager 6.42
 
-Download
-Get the latest build from the project's GitHub Releases page:
-- Windows app: download the installer or executable attached to
-  the latest release.
-- Browser extension: use the extension/ folder in this
-  repository, or download an extension ZIP if one is attached to the
-  release.
-Recommended release assets - Tafim-Downloader-Setup.exe ---
-Windows installer, if your build produces one. - Tafim-Downloader.exe
---- portable executable, if provided. - extension.zip --- packaged
-browser extension, if provided.
-Install the Windows application
-1. Open the repository's Releases page.
-2. Download the Windows installer or executable attached to the latest
-   release.
-3. Run the downloaded file and follow the installer instructions, if
-   applicable.
-4. Launch Tafim Downloader.
-5. If Windows Firewall asks for permission, allow access only on
-   trusted Private networks, if required by the app.
-If a release provides only a portable .exe, there may be no
-installation wizard: save the file in a suitable folder and run it.
-Install the browser extension
-The extension source is stored in the extension/ directory.
-Chrome
-1. Download and extract the repository ZIP, or clone the repository.
-2. Open chrome://extensions.
-3. Enable Developer mode.
-4. Click Load unpacked.
-5. Select the extension/ folder that contains manifest.json.
-Microsoft Edge
-1. Open edge://extensions.
-2. Enable Developer mode.
-3. Click Load unpacked.
-4. Select the extension/ folder that contains manifest.json.
-If an extension.zip is provided in Releases, extract it first and
-select the folder containing manifest.json.
-Connect the extension to Tafim Downloader
-1. Start the Tafim Downloader desktop application.
-2. Confirm the extension is installed and enabled.
-3. Open the extension from the browser toolbar.
-4. Follow the extension's connection instructions to connect it to the
-   running desktop app.
-The exact connection method depends on the implementation. If the app
-uses a local HTTP endpoint, native messaging, or a local WebSocket, the
-desktop app and extension must be configured for the same method and
-compatible versions.
+A high-performance, native Win32 C/C++ Internet Download Manager featuring dynamic segment splitting, multi-connection acceleration, video sniffing, and seamless browser integration.
+
+---
+
+## Key Features
+
+- **Blazing Fast Multi-Connection Acceleration**:
+  - Configurable connections (1, 2, 4, 8, 16, 24, 32 parallel threads).
+  - **Dynamic Segment Splitting**: Automatically detects when one thread completes and splits the largest remaining chunk so all connections stay green and download at maximum line speed until 100%.
+- **Zero Disk Bloat & Instant File Allocation**:
+  - Uses NTFS Sparse Files (`FSCTL_SET_SPARSE`) so files allocate disk sectors only as data arrives—no SSD lockups or artificial storage bloat even when downloading 30GB–100GB files.
+- **Advanced Cloudflare & WAF Bypass**:
+  - Intelligent TLS & User-Agent fallback engine (`curl/8.4.0` / browser headers) to bypass Cloudflare 403 blocks and JA3 fingerprint mismatches.
+- **Web Video Sniffing & DASH Demuxing**:
+  - Complete support for YouTube, Facebook, Instagram, TikTok, Twitter/X, Vimeo, Dailymotion, and Google Drive.
+  - Automatic DASH audio and video stream merging using native pipes.
+- **Clipboard URL Monitoring**:
+  - Automatically detects downloadable links copied to the clipboard and prompts for instant one-click download.
+- **Built-in File Checksum & Integrity Calculator**:
+  - Instant MD5 and SHA-256 calculation with one-click copy and live hash verification against expected hashes.
+- **Post-Download Automation**:
+  - Turn off / shutdown computer when all active downloads finish (with 15-second safety countdown).
+  - Optional sound effect on download complete.
+- **Bandwidth Control & Speed Limiter**:
+  - Real-time KB/s throttling per task or globally.
+- **Browser Extension Integration**:
+  - High-speed local loopback server + Native Messaging host (`TafimHost.exe`) for Chrome, Edge, Brave, and other Chromium browsers.
+
+---
+
+## Installation
+
+### Option 1: Standalone Installer (Recommended)
+1. Run `Setup_Tafim.exe`.
+2. Follow the wizard to install Tafim IDM to `%LOCALAPPDATA%\Programs\Tafim`.
+3. The installer registers the desktop app, tray icon, file associations, and native browser host automatically.
+
+### Option 2: Browser Extension Setup
+1. In Chrome / Edge / Brave, navigate to `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. Click **Load unpacked** and select the `extension/` folder in this repository.
+4. Run `register_extension.bat` as Administrator to link the extension to Tafim IDM.
+
+---
+
+## Building from Source
+
+### Prerequisites
+- Windows 10 / 11 (x64)
+- Visual Studio 2022 (with "Desktop development with C++" workload)
+
+### Build Command
+Run `build.bat` in a Developer Command Prompt or normal terminal:
+```cmd
+build.bat
+```
+The script automatically invokes MSVC `cl.exe`, compiles all native executables (`Tafim.exe`, `Uninstall.exe`, `TafimHost.exe`), and packages the self-contained `Setup_Tafim.exe`.

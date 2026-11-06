@@ -44,24 +44,22 @@ async function getCookiesForUrl(targetUrl) {
     const cookieMap = new Map();
     cookies.forEach(c => cookieMap.set(c.name, c.value));
 
-    // For Google Drive / Usercontent, include domain-level google cookies
-    if (targetUrl.includes('google.com') || targetUrl.includes('googleusercontent.com')) {
-      try {
-        const extra = await chrome.cookies.getAll({ domain: '.google.com' });
-        extra.forEach(c => {
+    // Extract base domain and fetch domain-level cookies (GitHub, SourceForge, MediaFire, etc.)
+    try {
+      const u = new URL(targetUrl);
+      const hostParts = u.hostname.split('.');
+      if (hostParts.length >= 2) {
+        const rootDomain = '.' + hostParts.slice(-2).join('.');
+        const domainCookies = await chrome.cookies.getAll({ domain: rootDomain });
+        domainCookies.forEach(c => {
           if (!cookieMap.has(c.name)) cookieMap.set(c.name, c.value);
         });
-      } catch (_) {}
-    }
-    // For ChatGPT / OpenAI
-    if (targetUrl.includes('openai.com') || targetUrl.includes('chatgpt.com') || targetUrl.includes('oaiusercontent.com')) {
-      try {
-        const extra = await chrome.cookies.getAll({ domain: '.chatgpt.com' });
-        extra.forEach(c => {
+        const bareDomainCookies = await chrome.cookies.getAll({ domain: hostParts.slice(-2).join('.') });
+        bareDomainCookies.forEach(c => {
           if (!cookieMap.has(c.name)) cookieMap.set(c.name, c.value);
         });
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
 
     const pairs = [];
     cookieMap.forEach((v, k) => pairs.push(`${k}=${v}`));

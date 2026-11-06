@@ -1,0 +1,99 @@
+#pragma once
+
+#define IDI_APP_ICON            101
+#define IDI_DOWNLOAD_ICON       102
+
+// Toolbar Command IDs
+#define ID_TOOLBAR_ADD_URL      201
+#define ID_TOOLBAR_RESUME       202
+#define ID_TOOLBAR_STOP         203
+#define ID_TOOLBAR_STOP_ALL     204
+#define ID_TOOLBAR_DELETE       205
+#define ID_TOOLBAR_DELETE_COMP  206
+#define ID_TOOLBAR_OPTIONS      207
+#define ID_TOOLBAR_SCHEDULER    208
+#define ID_TOOLBAR_START_QUEUE  209
+#define ID_TOOLBAR_STOP_QUEUE   210
+#define ID_TOOLBAR_GRABBER      211
+#define ID_TOOLBAR_TELL_FRIEND  212
+
+// Menus
+#define ID_MENU_TASKS_ADD_URL   301
+#define ID_MENU_TASKS_BATCH     302
+#define ID_MENU_TASKS_GRABBER   303
+#define ID_MENU_TASKS_EXIT      304
+
+#define ID_TRAY_OPEN            801
+#define ID_TRAY_ADD_URL         802
+#define ID_TRAY_PAUSE_ALL       803
+#define ID_TRAY_RESUME_ALL      804
+#define ID_TRAY_EXIT            805
+
+#define ID_MENU_FILE_RESUME     311
+#define ID_MENU_FILE_STOP       312
+#define ID_MENU_FILE_DELETE     313
+#define ID_MENU_FILE_DELETE_COMP 314
+#define ID_MENU_FILE_OPEN       315
+#define ID_MENU_FILE_OPEN_FOLDER 316
+#define ID_MENU_REFRESH_ADDRESS 317
+#define ID_MENU_CALCULATE_HASH  318
+
+#define ID_MENU_DOWNLOADS_PAUSE_ALL 321
+#define ID_MENU_DOWNLOADS_RESUME_ALL 322
+#define ID_MENU_DOWNLOADS_STOP_ALL   323
+#define ID_MENU_DOWNLOADS_SPEED_LIMIT 324
+#define ID_MENU_SPEED_LIMIT_ON        325
+#define ID_MENU_SPEED_LIMIT_OFF       326
+#define ID_MENU_SPEED_LIMIT_SETTINGS  327
+#define ID_MENU_SHUTDOWN_WHEN_DONE    328
+#define ID_MENU_CLIPBOARD_MONITOR     329
+
+#define ID_MENU_VIEW_TOOLBAR    331
+#define ID_MENU_VIEW_STATUSBAR  332
+
+#define ID_MENU_HELP_CONTENTS   341
+#define ID_MENU_HELP_ABOUT      342
+#define ID_MENU_REGISTRATION    351
+
+// Controls in Main Window
+#define IDC_MAIN_TOOLBAR        401
+#define IDC_MAIN_TREEVIEW       402
+#define IDC_MAIN_LISTVIEW       403
+#define IDC_MAIN_STATUSBAR      404
+
+// Controls in Download Popup Window (Image 1)
+#define IDC_POPUP_TAB           501
+#define IDC_POPUP_URL_LABEL     502
+#define IDC_POPUP_STATUS_LBL    503
+#define IDC_POPUP_SIZE_LBL      504
+#define IDC_POPUP_DOWNLOADED_LBL 505
+#define IDC_POPUP_SPEED_LBL     506
+#define IDC_POPUP_TIMELEFT_LBL  507
+#define IDC_POPUP_RESUME_LBL    508
+#define IDC_POPUP_PROGRESS      509
+#define IDC_POPUP_BTN_DETAILS   510
+#define IDC_POPUP_BTN_PAUSE     511
+#define IDC_POPUP_BTN_CANCEL    512
+#define IDC_POPUP_SEGMENT_BAR   513
+#define IDC_POPUP_CONN_LIST     514
+#define IDC_POPUP_CONN_HEADER   515
+#define IDC_POPUP_CHK_SPEEDLIMIT 516
+#define IDC_POPUP_EDIT_SPEEDLIMIT 517
+#define IDC_POPUP_BTN_APPLY_SPEED 518
+
+// Add URL Dialog
+#define IDD_ADD_URL_DIALOG      601
+#define IDC_ADD_URL_EDIT        602
+#define IDC_ADD_URL_OK          603
+#define IDC_ADD_URL_CANCEL      604
+
+// Add Download Confirmation / Info Dialog
+#define IDD_DOWNLOAD_INFO_DIALOG 701
+#define IDC_INFO_URL_EDIT        702
+#define IDC_INFO_FILE_EDIT       703
+#define IDC_INFO_CATEGORY_COMBO  704
+#define IDC_INFO_PATH_EDIT       705
+#define IDC_INFO_BROWSE_BTN      706
+#define IDC_INFO_START_BTN       707
+#define IDC_INFO_LATER_BTN       708
+#define IDC_INFO_CANCEL_BTN      709
