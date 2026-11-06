@@ -3,4 +3,6 @@ build/
 *.res
 *.log
 *.tmp
+*.pdb
+*.ilk
 .vs/
