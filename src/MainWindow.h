@@ -2,6 +2,7 @@
 #include "Common.h"
 #include "DownloadEngine.h"
 #include "DownloadPopup.h"
+#include <functional>
 
 class MainWindow : public IDownloadCallback {
 public:
@@ -22,7 +23,7 @@ private:
     MainWindow(HINSTANCE hInstance, const std::wstring& cmdLine = L"");
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK AddUrlDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK ModalDlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     void CreateMenus();
     void CreateToolbar();

@@ -1,4 +1,4 @@
-# Tafim Internet Download Manager 6.42
+# Tafim Internet Download Manager 2.0
 
 A high-performance, native Win32 C/C++ Internet Download Manager featuring dynamic segment splitting, multi-connection acceleration, video sniffing, and seamless browser integration.
 

@@ -159,6 +159,32 @@ static HIMAGELIST CreateIDMToolbarImageList() {
     return hList;
 }
 
+LRESULT CALLBACK MainWindow::ModalDlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_NCCREATE) {
+        CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+        return DefWindowProc(hWnd, msg, wParam, lParam);
+    }
+    if (msg == WM_CREATE) {
+        CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+        return 0;
+    }
+    if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN) {
+        HDC hdc = (HDC)wParam;
+        SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+        return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+    }
+    auto pFn = (std::function<void(HWND, UINT, WPARAM, LPARAM)>*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+    if (pFn && *pFn) {
+        if (msg == WM_COMMAND || msg == WM_CLOSE) {
+            (*pFn)(hWnd, msg, wParam, lParam);
+            if (msg == WM_CLOSE) return 0;
+        }
+    }
+    return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
 MainWindow* MainWindow::Create(HINSTANCE hInstance, const std::wstring& cmdLine) {
     WNDCLASSEX wc = { 0 };
     wc.cbSize = sizeof(WNDCLASSEX);
@@ -171,6 +197,16 @@ MainWindow* MainWindow::Create(HINSTANCE hInstance, const std::wstring& cmdLine)
     wc.hIcon = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
     wc.hIconSm = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
     RegisterClassEx(&wc);
+
+    WNDCLASSEX wcd = { 0 };
+    wcd.cbSize = sizeof(WNDCLASSEX);
+    wcd.style = CS_HREDRAW | CS_VREDRAW;
+    wcd.lpfnWndProc = MainWindow::ModalDlgProc;
+    wcd.hInstance = hInstance;
+    wcd.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wcd.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wcd.lpszClassName = L"TafimModalDialog";
+    RegisterClassEx(&wcd);
 
     RegisterSegmentBarClass(hInstance);
 
@@ -197,7 +233,7 @@ MainWindow::MainWindow(HINSTANCE hInstance, const std::wstring& cmdLine)
     m_hWnd = CreateWindowExW(
         WS_EX_APPWINDOW,
         WC_MAINWINDOW,
-        L"Tafim Internet Download Manager 6.42",
+        L"Tafim Internet Download Manager 2.0",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         x, y, winW, winH,
         NULL,
@@ -1017,12 +1053,69 @@ void MainWindow::ShowChecksumDialog(HWND hParent, const std::wstring& filePath, 
     }
 
     std::wstring dlgTitle = L"Checksum Calculator - " + fileName;
+    bool done = false;
+    HWND hEditExp = NULL;
+    HWND hLblMatch = NULL;
+
+    auto copyToClipboard = [](HWND hOwner, const std::wstring& str) {
+        if (OpenClipboard(hOwner)) {
+            EmptyClipboard();
+            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (str.length() + 1) * sizeof(wchar_t));
+            if (hMem) {
+                wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+                if (pMem) {
+                    wcscpy_s(pMem, str.length() + 1, str.c_str());
+                    GlobalUnlock(hMem);
+                    SetClipboardData(CF_UNICODETEXT, hMem);
+                }
+            }
+            CloseClipboard();
+        }
+    };
+
+    std::function<void(HWND, UINT, WPARAM, LPARAM)> dlgHandler = [&](HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (msg == WM_COMMAND) {
+            int cmd = LOWORD(wParam);
+            int code = HIWORD(wParam);
+            if (cmd == 3002) {
+                copyToClipboard(hDlg, md5);
+            } else if (cmd == 3004) {
+                copyToClipboard(hDlg, sha256);
+            } else if (cmd == 3005 && code == EN_CHANGE) {
+                if (hEditExp && hLblMatch) {
+                    wchar_t inBuf[256] = { 0 };
+                    GetWindowTextW(hEditExp, inBuf, 256);
+                    std::wstring inHash = inBuf;
+                    while (!inHash.empty() && (inHash.front() == L' ' || inHash.front() == L'"')) inHash.erase(inHash.begin());
+                    while (!inHash.empty() && (inHash.back() == L' ' || inHash.back() == L'"')) inHash.pop_back();
+                    std::transform(inHash.begin(), inHash.end(), inHash.begin(), ::towlower);
+
+                    if (inHash.empty()) {
+                        SetWindowTextW(hLblMatch, L"Enter expected hash above to verify integrity.");
+                    } else if (inHash == md5) {
+                        SetWindowTextW(hLblMatch, L"[MATCH] MD5 Checksum matches perfectly! (Integrity Verified)");
+                    } else if (inHash == sha256) {
+                        SetWindowTextW(hLblMatch, L"[MATCH] SHA-256 Checksum matches perfectly! (Integrity Verified)");
+                    } else {
+                        SetWindowTextW(hLblMatch, L"[DOES NOT MATCH] The hash does not match the file!");
+                    }
+                }
+            } else if (cmd == IDOK || cmd == IDCANCEL) {
+                done = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            }
+        } else if (msg == WM_CLOSE) {
+            done = true;
+            PostMessage(hDlg, WM_NULL, 0, 0);
+        }
+    };
+
     HWND hDlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        L"#32770", dlgTitle.c_str(),
+        WS_EX_DLGMODALFRAME,
+        L"TafimModalDialog", dlgTitle.c_str(),
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         0, 0, 560, 340,
-        hParent ? hParent : m_hWnd, NULL, m_hInstance, NULL
+        hParent ? hParent : m_hWnd, NULL, m_hInstance, &dlgHandler
     );
 
     RECT rcOwner, rcDlg;
@@ -1058,10 +1151,10 @@ void MainWindow::ShowChecksumDialog(HWND hParent, const std::wstring& filePath, 
 
     HWND hLblExp = CreateWindowExW(0, L"STATIC", L"Paste Expected Hash:", WS_CHILD | WS_VISIBLE, 35, 155, 140, 20, hDlg, NULL, m_hInstance, NULL);
     SendMessage(hLblExp, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-    HWND hEditExp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 180, 152, 335, 24, hDlg, (HMENU)3005, m_hInstance, NULL);
+    hEditExp = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 180, 152, 335, 24, hDlg, (HMENU)3005, m_hInstance, NULL);
     SendMessage(hEditExp, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-    HWND hLblMatch = CreateWindowExW(0, L"STATIC", L"Enter expected hash above to verify integrity.", WS_CHILD | WS_VISIBLE | SS_CENTER, 35, 195, 480, 30, hDlg, (HMENU)3006, m_hInstance, NULL);
+    hLblMatch = CreateWindowExW(0, L"STATIC", L"Enter expected hash above to verify integrity.", WS_CHILD | WS_VISIBLE | SS_CENTER, 35, 195, 480, 30, hDlg, (HMENU)3006, m_hInstance, NULL);
     SendMessage(hLblMatch, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
     HWND hBtnClose = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 440, 260, 90, 26, hDlg, (HMENU)IDOK, m_hInstance, NULL);
@@ -1069,53 +1162,11 @@ void MainWindow::ShowChecksumDialog(HWND hParent, const std::wstring& filePath, 
 
     EnableWindow(hParent ? hParent : m_hWnd, FALSE);
 
-    auto copyToClipboard = [&](const std::wstring& str) {
-        if (OpenClipboard(hDlg)) {
-            EmptyClipboard();
-            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (str.length() + 1) * sizeof(wchar_t));
-            if (hMem) {
-                wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
-                if (pMem) {
-                    wcscpy_s(pMem, str.length() + 1, str.c_str());
-                    GlobalUnlock(hMem);
-                    SetClipboardData(CF_UNICODETEXT, hMem);
-                }
-            }
-            CloseClipboard();
-        }
-    };
-
     MSG msg;
-    bool done = false;
     while (!done && GetMessage(&msg, NULL, 0, 0)) {
-        if (msg.message == WM_COMMAND) {
-            int cmd = LOWORD(msg.wParam);
-            int code = HIWORD(msg.wParam);
-            if (cmd == 3002) {
-                copyToClipboard(md5);
-            } else if (cmd == 3004) {
-                copyToClipboard(sha256);
-            } else if (cmd == 3005 && code == EN_CHANGE) {
-                wchar_t inBuf[256] = { 0 };
-                GetWindowTextW(hEditExp, inBuf, 256);
-                std::wstring inHash = inBuf;
-                while (!inHash.empty() && (inHash.front() == L' ' || inHash.front() == L'"')) inHash.erase(inHash.begin());
-                while (!inHash.empty() && (inHash.back() == L' ' || inHash.back() == L'"')) inHash.pop_back();
-                std::transform(inHash.begin(), inHash.end(), inHash.begin(), ::towlower);
-
-                if (inHash.empty()) {
-                    SetWindowTextW(hLblMatch, L"Enter expected hash above to verify integrity.");
-                } else if (inHash == md5) {
-                    SetWindowTextW(hLblMatch, L"[MATCH] MD5 Checksum matches perfectly! (Integrity Verified)");
-                } else if (inHash == sha256) {
-                    SetWindowTextW(hLblMatch, L"[MATCH] SHA-256 Checksum matches perfectly! (Integrity Verified)");
-                } else {
-                    SetWindowTextW(hLblMatch, L"[DOES NOT MATCH] The hash does not match the file!");
-                }
-            } else if (cmd == IDOK || cmd == IDCANCEL) {
-                done = true;
-                break;
-            }
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
+            done = true;
+            break;
         }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
@@ -1145,102 +1196,41 @@ static bool PickFolder(HWND hOwner, const std::wstring& currentPath, std::wstrin
 }
 
 void MainWindow::ShowOptionsDialog() {
-    HWND hDlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        L"#32770", L"Tafim IDM - Options & Preferences",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        0, 0, 530, 360,
-        m_hWnd, NULL, m_hInstance, NULL
-    );
-
-    RECT rcOwner, rcDlg;
-    GetWindowRect(m_hWnd, &rcOwner);
-    GetWindowRect(hDlg, &rcDlg);
-    int x = rcOwner.left + (rcOwner.right - rcOwner.left - 530) / 2;
-    int y = rcOwner.top + (rcOwner.bottom - rcOwner.top - 360) / 2;
-    SetWindowPos(hDlg, NULL, x, y, 530, 360, SWP_NOZORDER);
-
-    // 1. General Box
-    HWND hGrpGeneral = CreateWindowExW(0, L"BUTTON", L"General & Downloads", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 15, 12, 490, 115, hDlg, NULL, m_hInstance, NULL);
-    SendMessage(hGrpGeneral, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hLblDir = CreateWindowExW(0, L"STATIC", L"Default Download Folder:", WS_CHILD | WS_VISIBLE, 30, 35, 180, 18, hDlg, NULL, m_hInstance, NULL);
-    SendMessage(hLblDir, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hEditDir = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", m_defaultDownloadDir.c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 30, 56, 360, 24, hDlg, (HMENU)1001, m_hInstance, NULL);
-    SendMessage(hEditDir, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hBtnBrowse = CreateWindowExW(0, L"BUTTON", L"Browse...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 400, 56, 85, 24, hDlg, (HMENU)1002, m_hInstance, NULL);
-    SendMessage(hBtnBrowse, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hLblConn = CreateWindowExW(0, L"STATIC", L"Default Max Connections Number:", WS_CHILD | WS_VISIBLE, 30, 92, 210, 18, hDlg, NULL, m_hInstance, NULL);
-    SendMessage(hLblConn, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hCmbConn = CreateWindowExW(0, WC_COMBOBOX, L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 245, 89, 70, 160, hDlg, (HMENU)1003, m_hInstance, NULL);
-    SendMessage(hCmbConn, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-    const wchar_t* connOpts[] = { L"1", L"2", L"4", L"8", L"16", L"24", L"32" };
-    int curConns = m_engine ? m_engine->GetDefaultNumConnections() : 8;
-    int selIdx = 3; // default 8
-    for (int i = 0; i < 7; i++) {
-        SendMessageW(hCmbConn, CB_ADDSTRING, 0, (LPARAM)connOpts[i]);
-        if (_wtoi(connOpts[i]) == curConns) selIdx = i;
-    }
-    SendMessage(hCmbConn, CB_SETCURSEL, selIdx, 0);
-
-    // 2. Automation Box
-    HWND hGrpAuto = CreateWindowExW(0, L"BUTTON", L"Automation & Sounds", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 15, 138, 490, 135, hDlg, NULL, m_hInstance, NULL);
-    SendMessage(hGrpAuto, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hChkClip = CreateWindowExW(0, L"BUTTON", L"Monitor clipboard for copied downloadable URLs", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 162, 450, 20, hDlg, (HMENU)1004, m_hInstance, NULL);
-    SendMessage(hChkClip, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-    SendMessage(hChkClip, BM_SETCHECK, m_clipboardMonitoring ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    HWND hChkSound = CreateWindowExW(0, L"BUTTON", L"Play sound effect when download completes", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 188, 450, 20, hDlg, (HMENU)1005, m_hInstance, NULL);
-    SendMessage(hChkSound, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-    SendMessage(hChkSound, BM_SETCHECK, m_soundOnFinish ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    HWND hChkShut = CreateWindowExW(0, L"BUTTON", L"Turn off / Shutdown computer when all downloads finish", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 214, 450, 20, hDlg, (HMENU)1006, m_hInstance, NULL);
-    SendMessage(hChkShut, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-    SendMessage(hChkShut, BM_SETCHECK, m_shutdownWhenDone ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    HWND hChkStartup = CreateWindowExW(0, L"BUTTON", L"Launch Tafim automatically on Windows startup", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 240, 450, 20, hDlg, (HMENU)1007, m_hInstance, NULL);
-    SendMessage(hChkStartup, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-    SendMessage(hChkStartup, BM_SETCHECK, BST_CHECKED, 0);
-
-    HWND hBtnOk = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 305, 285, 95, 26, hDlg, (HMENU)IDOK, m_hInstance, NULL);
-    SendMessage(hBtnOk, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    HWND hBtnCancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 410, 285, 95, 26, hDlg, (HMENU)IDCANCEL, m_hInstance, NULL);
-    SendMessage(hBtnCancel, WM_SETFONT, (WPARAM)m_hFont, TRUE);
-
-    EnableWindow(m_hWnd, FALSE);
-    SetFocus(hEditDir);
-
-    MSG msg;
     bool done = false;
-    while (!done && GetMessage(&msg, NULL, 0, 0)) {
-        if (msg.message == WM_COMMAND) {
-            int cmd = LOWORD(msg.wParam);
+    HWND hEditDir = NULL;
+    HWND hCmbConn = NULL;
+    HWND hChkClip = NULL;
+    HWND hChkSound = NULL;
+    HWND hChkShut = NULL;
+    HWND hChkStartup = NULL;
+
+    const wchar_t* connOpts[] = { L"1", L"2", L"4", L"8", L"16", L"24", L"32" };
+
+    std::function<void(HWND, UINT, WPARAM, LPARAM)> dlgHandler = [&](HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (msg == WM_COMMAND) {
+            int cmd = LOWORD(wParam);
             if (cmd == 1002) {
                 std::wstring picked;
                 if (PickFolder(hDlg, m_defaultDownloadDir, picked)) {
-                    SetWindowTextW(hEditDir, picked.c_str());
+                    if (hEditDir) SetWindowTextW(hEditDir, picked.c_str());
                 }
             } else if (cmd == IDOK) {
-                wchar_t buf[MAX_PATH] = { 0 };
-                GetWindowTextW(hEditDir, buf, MAX_PATH);
-                if (wcslen(buf) > 0) {
-                    m_defaultDownloadDir = buf;
+                if (hEditDir) {
+                    wchar_t buf[MAX_PATH] = { 0 };
+                    GetWindowTextW(hEditDir, buf, MAX_PATH);
+                    if (wcslen(buf) > 0) {
+                        m_defaultDownloadDir = buf;
+                    }
                 }
-                int curSel = (int)SendMessage(hCmbConn, CB_GETCURSEL, 0, 0);
+                int curSel = hCmbConn ? (int)SendMessage(hCmbConn, CB_GETCURSEL, 0, 0) : -1;
                 int conns = 8;
                 if (curSel >= 0 && curSel < 7) conns = _wtoi(connOpts[curSel]);
                 if (m_engine) m_engine->SetDefaultNumConnections(conns);
 
-                m_clipboardMonitoring = (SendMessage(hChkClip, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                m_soundOnFinish = (SendMessage(hChkSound, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                m_shutdownWhenDone = (SendMessage(hChkShut, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                bool autoStart = (SendMessage(hChkStartup, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                m_clipboardMonitoring = hChkClip ? (SendMessage(hChkClip, BM_GETCHECK, 0, 0) == BST_CHECKED) : true;
+                m_soundOnFinish = hChkSound ? (SendMessage(hChkSound, BM_GETCHECK, 0, 0) == BST_CHECKED) : true;
+                m_shutdownWhenDone = hChkShut ? (SendMessage(hChkShut, BM_GETCHECK, 0, 0) == BST_CHECKED) : false;
+                bool autoStart = hChkStartup ? (SendMessage(hChkStartup, BM_GETCHECK, 0, 0) == BST_CHECKED) : true;
                 SetAutoStart(autoStart);
 
                 HKEY hKey;
@@ -1257,10 +1247,96 @@ void MainWindow::ShowOptionsDialog() {
                     RegCloseKey(hKey);
                 }
                 done = true;
-                break;
+                PostMessage(hDlg, WM_NULL, 0, 0);
             } else if (cmd == IDCANCEL) {
                 done = true;
-                break;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            }
+        } else if (msg == WM_CLOSE) {
+            done = true;
+            PostMessage(hDlg, WM_NULL, 0, 0);
+        }
+    };
+
+    HWND hDlg = CreateWindowExW(
+        WS_EX_DLGMODALFRAME,
+        L"TafimModalDialog", L"Tafim IDM - Options & Preferences",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        0, 0, 530, 360,
+        m_hWnd, NULL, m_hInstance, &dlgHandler
+    );
+
+    RECT rcOwner, rcDlg;
+    GetWindowRect(m_hWnd, &rcOwner);
+    GetWindowRect(hDlg, &rcDlg);
+    int x = rcOwner.left + (rcOwner.right - rcOwner.left - 530) / 2;
+    int y = rcOwner.top + (rcOwner.bottom - rcOwner.top - 360) / 2;
+    SetWindowPos(hDlg, NULL, x, y, 530, 360, SWP_NOZORDER);
+
+    // 1. General Box
+    HWND hGrpGeneral = CreateWindowExW(0, L"BUTTON", L"General && Downloads", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 15, 12, 490, 115, hDlg, NULL, m_hInstance, NULL);
+    SendMessage(hGrpGeneral, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    HWND hLblDir = CreateWindowExW(0, L"STATIC", L"Default Download Folder:", WS_CHILD | WS_VISIBLE, 30, 35, 180, 18, hDlg, NULL, m_hInstance, NULL);
+    SendMessage(hLblDir, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    hEditDir = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", m_defaultDownloadDir.c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 30, 56, 360, 24, hDlg, (HMENU)1001, m_hInstance, NULL);
+    SendMessage(hEditDir, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    HWND hBtnBrowse = CreateWindowExW(0, L"BUTTON", L"Browse...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 400, 56, 85, 24, hDlg, (HMENU)1002, m_hInstance, NULL);
+    SendMessage(hBtnBrowse, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    HWND hLblConn = CreateWindowExW(0, L"STATIC", L"Default Max Connections Number:", WS_CHILD | WS_VISIBLE, 30, 92, 210, 18, hDlg, NULL, m_hInstance, NULL);
+    SendMessage(hLblConn, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    hCmbConn = CreateWindowExW(0, WC_COMBOBOX, L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 245, 89, 70, 160, hDlg, (HMENU)1003, m_hInstance, NULL);
+    SendMessage(hCmbConn, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    int curConns = m_engine ? m_engine->GetDefaultNumConnections() : 8;
+    int selIdx = 3; // default 8
+    for (int i = 0; i < 7; i++) {
+        SendMessageW(hCmbConn, CB_ADDSTRING, 0, (LPARAM)connOpts[i]);
+        if (_wtoi(connOpts[i]) == curConns) selIdx = i;
+    }
+    SendMessage(hCmbConn, CB_SETCURSEL, selIdx, 0);
+
+    // 2. Automation Box
+    HWND hGrpAuto = CreateWindowExW(0, L"BUTTON", L"Automation && Sounds", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 15, 138, 490, 135, hDlg, NULL, m_hInstance, NULL);
+    SendMessage(hGrpAuto, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    hChkClip = CreateWindowExW(0, L"BUTTON", L"Monitor clipboard for copied downloadable URLs", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 162, 450, 20, hDlg, (HMENU)1004, m_hInstance, NULL);
+    SendMessage(hChkClip, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessage(hChkClip, BM_SETCHECK, m_clipboardMonitoring ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    hChkSound = CreateWindowExW(0, L"BUTTON", L"Play sound effect when download completes", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 188, 450, 20, hDlg, (HMENU)1005, m_hInstance, NULL);
+    SendMessage(hChkSound, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessage(hChkSound, BM_SETCHECK, m_soundOnFinish ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    hChkShut = CreateWindowExW(0, L"BUTTON", L"Turn off / Shutdown computer when all downloads finish", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 214, 450, 20, hDlg, (HMENU)1006, m_hInstance, NULL);
+    SendMessage(hChkShut, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessage(hChkShut, BM_SETCHECK, m_shutdownWhenDone ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    hChkStartup = CreateWindowExW(0, L"BUTTON", L"Launch Tafim automatically on Windows startup", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 30, 240, 450, 20, hDlg, (HMENU)1007, m_hInstance, NULL);
+    SendMessage(hChkStartup, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessage(hChkStartup, BM_SETCHECK, BST_CHECKED, 0);
+
+    HWND hBtnOk = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 305, 285, 95, 26, hDlg, (HMENU)IDOK, m_hInstance, NULL);
+    SendMessage(hBtnOk, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    HWND hBtnCancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 410, 285, 95, 26, hDlg, (HMENU)IDCANCEL, m_hInstance, NULL);
+    SendMessage(hBtnCancel, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    EnableWindow(m_hWnd, FALSE);
+    SetFocus(hEditDir);
+
+    MSG msg;
+    while (!done && GetMessage(&msg, NULL, 0, 0)) {
+        if (msg.message == WM_KEYDOWN) {
+            if (msg.wParam == VK_RETURN) {
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), (LPARAM)hBtnOk);
+                continue;
+            } else if (msg.wParam == VK_ESCAPE) {
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDCANCEL, BN_CLICKED), (LPARAM)hBtnCancel);
+                continue;
             }
         }
         TranslateMessage(&msg);
@@ -1273,12 +1349,50 @@ void MainWindow::ShowOptionsDialog() {
 }
 
 void MainWindow::ShowAddUrlDialog() {
+    bool dialogDone = false;
+    std::wstring enteredUrl;
+    std::wstring enteredFolder = m_defaultDownloadDir;
+    HWND hEdit = NULL;
+    HWND hEditPath = NULL;
+
+    std::function<void(HWND, UINT, WPARAM, LPARAM)> dlgHandler = [&](HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (msg == WM_COMMAND) {
+            int cmd = LOWORD(wParam);
+            if (cmd == 1004) {
+                std::wstring picked;
+                if (PickFolder(hDlg, enteredFolder, picked)) {
+                    enteredFolder = picked;
+                    if (hEditPath) SetWindowTextW(hEditPath, picked.c_str());
+                }
+            } else if (cmd == IDOK) {
+                if (hEdit) {
+                    wchar_t buf[2048] = { 0 };
+                    GetWindowTextW(hEdit, buf, 2048);
+                    enteredUrl = buf;
+                }
+                if (hEditPath) {
+                    wchar_t pBuf[MAX_PATH] = { 0 };
+                    GetWindowTextW(hEditPath, pBuf, MAX_PATH);
+                    enteredFolder = pBuf;
+                }
+                dialogDone = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            } else if (cmd == IDCANCEL) {
+                dialogDone = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            }
+        } else if (msg == WM_CLOSE) {
+            dialogDone = true;
+            PostMessage(hDlg, WM_NULL, 0, 0);
+        }
+    };
+
     HWND hDlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        L"#32770", L"Enter new address to download",
+        WS_EX_DLGMODALFRAME,
+        L"TafimModalDialog", L"Enter new address to download",
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         0, 0, 530, 210,
-        m_hWnd, NULL, m_hInstance, NULL
+        m_hWnd, NULL, m_hInstance, &dlgHandler
     );
 
     RECT rcOwner, rcDlg;
@@ -1292,7 +1406,7 @@ void MainWindow::ShowAddUrlDialog() {
     HWND hLbl = CreateWindowExW(0, L"STATIC", L"Address:", WS_CHILD | WS_VISIBLE, 15, 20, 65, 20, hDlg, NULL, m_hInstance, NULL);
     SendMessage(hLbl, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-    HWND hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         85, 18, 410, 24, hDlg, (HMENU)IDC_ADD_URL_EDIT, m_hInstance, NULL);
     SendMessage(hEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
@@ -1301,7 +1415,7 @@ void MainWindow::ShowAddUrlDialog() {
     HWND hLblSave = CreateWindowExW(0, L"STATIC", L"Save To:", WS_CHILD | WS_VISIBLE, 15, 58, 65, 20, hDlg, NULL, m_hInstance, NULL);
     SendMessage(hLblSave, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-    HWND hEditPath = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", m_defaultDownloadDir.c_str(),
+    hEditPath = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", m_defaultDownloadDir.c_str(),
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         85, 56, 315, 24, hDlg, (HMENU)1003, m_hInstance, NULL);
     SendMessage(hEditPath, WM_SETFONT, (WPARAM)m_hFont, TRUE);
@@ -1334,46 +1448,14 @@ void MainWindow::ShowAddUrlDialog() {
     SetFocus(hEdit);
 
     MSG msg;
-    bool dialogDone = false;
-    std::wstring enteredUrl;
-    std::wstring enteredFolder = m_defaultDownloadDir;
-
     while (!dialogDone && GetMessage(&msg, NULL, 0, 0)) {
         if (msg.message == WM_KEYDOWN) {
             if (msg.wParam == VK_RETURN) {
-                wchar_t buf[2048] = { 0 };
-                GetWindowTextW(hEdit, buf, 2048);
-                enteredUrl = buf;
-                wchar_t pBuf[MAX_PATH] = { 0 };
-                GetWindowTextW(hEditPath, pBuf, MAX_PATH);
-                enteredFolder = pBuf;
-                dialogDone = true;
-                break;
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), (LPARAM)hBtnOk);
+                continue;
             } else if (msg.wParam == VK_ESCAPE) {
-                dialogDone = true;
-                break;
-            }
-        }
-        if (msg.message == WM_COMMAND) {
-            int cmd = LOWORD(msg.wParam);
-            if (cmd == 1004) {
-                std::wstring picked;
-                if (PickFolder(hDlg, enteredFolder, picked)) {
-                    enteredFolder = picked;
-                    SetWindowTextW(hEditPath, picked.c_str());
-                }
-            } else if (cmd == IDOK) {
-                wchar_t buf[2048] = { 0 };
-                GetWindowTextW(hEdit, buf, 2048);
-                enteredUrl = buf;
-                wchar_t pBuf[MAX_PATH] = { 0 };
-                GetWindowTextW(hEditPath, pBuf, MAX_PATH);
-                enteredFolder = pBuf;
-                dialogDone = true;
-                break;
-            } else if (cmd == IDCANCEL) {
-                dialogDone = true;
-                break;
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDCANCEL, BN_CLICKED), (LPARAM)hBtnCancel);
+                continue;
             }
         }
         TranslateMessage(&msg);
@@ -1462,12 +1544,39 @@ void MainWindow::OnStopAll() {
 }
 
 void MainWindow::ShowSpeedLimiterDialog() {
+    bool done = false;
+    HWND hChk = NULL;
+    HWND hEdit = NULL;
+
+    std::function<void(HWND, UINT, WPARAM, LPARAM)> dlgHandler = [&](HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (msg == WM_COMMAND) {
+            int cmd = LOWORD(wParam);
+            if (cmd == IDOK) {
+                BOOL enabled = hChk ? (SendMessage(hChk, BM_GETCHECK, 0, 0) == BST_CHECKED) : FALSE;
+                wchar_t valStr[32] = { 0 };
+                if (hEdit) GetWindowTextW(hEdit, valStr, 32);
+                uint32_t val = (uint32_t)_wtoi(valStr);
+                if (val == 0) val = 500;
+                m_engine->SetGlobalSpeedLimit(enabled != FALSE, val);
+                UpdateSpeedLimiterStatusBar();
+                done = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            } else if (cmd == IDCANCEL) {
+                done = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            }
+        } else if (msg == WM_CLOSE) {
+            done = true;
+            PostMessage(hDlg, WM_NULL, 0, 0);
+        }
+    };
+
     HWND hDlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        L"#32770", L"Speed Limiter Settings",
+        WS_EX_DLGMODALFRAME,
+        L"TafimModalDialog", L"Speed Limiter Settings",
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         0, 0, 420, 210,
-        m_hWnd, NULL, m_hInstance, NULL
+        m_hWnd, NULL, m_hInstance, &dlgHandler
     );
 
     RECT rcOwner, rcDlg;
@@ -1477,7 +1586,7 @@ void MainWindow::ShowSpeedLimiterDialog() {
     int y = rcOwner.top + (rcOwner.bottom - rcOwner.top - 210) / 2;
     SetWindowPos(hDlg, NULL, x, y, 420, 210, SWP_NOZORDER);
 
-    HWND hChk = CreateWindowExW(0, L"BUTTON", L"Use Speed Limiter",
+    hChk = CreateWindowExW(0, L"BUTTON", L"Use Speed Limiter",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
         25, 20, 200, 24, hDlg, (HMENU)2001, m_hInstance, NULL);
     SendMessage(hChk, WM_SETFONT, (WPARAM)m_hFont, TRUE);
@@ -1491,7 +1600,7 @@ void MainWindow::ShowSpeedLimiterDialog() {
 
     wchar_t speedBuf[32];
     swprintf_s(speedBuf, L"%u", m_engine->GetGlobalSpeedLimitKBps() > 0 ? m_engine->GetGlobalSpeedLimitKBps() : 500);
-    HWND hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", speedBuf,
+    hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", speedBuf,
         WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL,
         290, 55, 60, 22, hDlg, (HMENU)2002, m_hInstance, NULL);
     SendMessage(hEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
@@ -1514,23 +1623,14 @@ void MainWindow::ShowSpeedLimiterDialog() {
     SetFocus(hEdit);
 
     MSG msg;
-    bool done = false;
     while (!done && GetMessage(&msg, NULL, 0, 0)) {
-        if (msg.message == WM_COMMAND) {
-            int cmd = LOWORD(msg.wParam);
-            if (cmd == IDOK) {
-                BOOL enabled = (SendMessage(hChk, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                wchar_t valStr[32] = { 0 };
-                GetWindowTextW(hEdit, valStr, 32);
-                uint32_t val = (uint32_t)_wtoi(valStr);
-                if (val == 0) val = 500;
-                m_engine->SetGlobalSpeedLimit(enabled != FALSE, val);
-                UpdateSpeedLimiterStatusBar();
-                done = true;
-                break;
-            } else if (cmd == IDCANCEL) {
-                done = true;
-                break;
+        if (msg.message == WM_KEYDOWN) {
+            if (msg.wParam == VK_RETURN) {
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), (LPARAM)hBtnOk);
+                continue;
+            } else if (msg.wParam == VK_ESCAPE) {
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDCANCEL, BN_CLICKED), (LPARAM)hBtnCancel);
+                continue;
             }
         }
         TranslateMessage(&msg);
@@ -1592,12 +1692,41 @@ void MainWindow::OnRefreshAddress() {
     auto item = m_engine->GetItem(selectedId);
     if (!item) return;
 
+    bool done = false;
+    HWND hEdit = NULL;
+
+    std::function<void(HWND, UINT, WPARAM, LPARAM)> dlgHandler = [&](HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (msg == WM_COMMAND) {
+            int cmd = LOWORD(wParam);
+            if (cmd == IDOK) {
+                if (hEdit) {
+                    wchar_t newUrlBuf[4096] = { 0 };
+                    GetWindowTextW(hEdit, newUrlBuf, 4096);
+                    std::wstring newUrl = newUrlBuf;
+                    if (!newUrl.empty() && (newUrl.find(L"http://") == 0 || newUrl.find(L"https://") == 0)) {
+                        m_engine->UpdateDownloadUrl(selectedId, newUrl);
+                        m_engine->ResumeDownload(selectedId);
+                        RefreshListView();
+                    }
+                }
+                done = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            } else if (cmd == IDCANCEL) {
+                done = true;
+                PostMessage(hDlg, WM_NULL, 0, 0);
+            }
+        } else if (msg == WM_CLOSE) {
+            done = true;
+            PostMessage(hDlg, WM_NULL, 0, 0);
+        }
+    };
+
     HWND hDlg = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        L"#32770", L"Refresh Download Address",
+        WS_EX_DLGMODALFRAME,
+        L"TafimModalDialog", L"Refresh Download Address",
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         0, 0, 520, 180,
-        m_hWnd, NULL, m_hInstance, NULL
+        m_hWnd, NULL, m_hInstance, &dlgHandler
     );
 
     RECT rcOwner, rcDlg;
@@ -1610,7 +1739,7 @@ void MainWindow::OnRefreshAddress() {
     HWND hLbl = CreateWindowExW(0, L"STATIC", L"Enter new / refreshed address for this download:", WS_CHILD | WS_VISIBLE, 15, 15, 480, 20, hDlg, NULL, m_hInstance, NULL);
     SendMessage(hLbl, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-    HWND hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", item->url.c_str(),
+    hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", item->url.c_str(),
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         15, 40, 475, 24, hDlg, (HMENU)1001, m_hInstance, NULL);
     SendMessage(hEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
@@ -1643,24 +1772,14 @@ void MainWindow::OnRefreshAddress() {
     SendMessage(hEdit, EM_SETSEL, 0, -1);
 
     MSG msg;
-    bool done = false;
     while (!done && GetMessage(&msg, NULL, 0, 0)) {
-        if (msg.message == WM_COMMAND) {
-            int cmd = LOWORD(msg.wParam);
-            if (cmd == IDOK) {
-                wchar_t newUrlBuf[4096] = { 0 };
-                GetWindowTextW(hEdit, newUrlBuf, 4096);
-                std::wstring newUrl = newUrlBuf;
-                if (!newUrl.empty() && (newUrl.find(L"http://") == 0 || newUrl.find(L"https://") == 0)) {
-                    m_engine->UpdateDownloadUrl(selectedId, newUrl);
-                    m_engine->ResumeDownload(selectedId);
-                    RefreshListView();
-                }
-                done = true;
-                break;
-            } else if (cmd == IDCANCEL) {
-                done = true;
-                break;
+        if (msg.message == WM_KEYDOWN) {
+            if (msg.wParam == VK_RETURN) {
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), (LPARAM)hBtnOk);
+                continue;
+            } else if (msg.wParam == VK_ESCAPE) {
+                SendMessage(hDlg, WM_COMMAND, MAKEWPARAM(IDCANCEL, BN_CLICKED), (LPARAM)hBtnCancel);
+                continue;
             }
         }
         TranslateMessage(&msg);
@@ -2066,7 +2185,7 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             break;
 
         case ID_MENU_HELP_ABOUT:
-            MessageBoxW(hWnd, L"Tafim Internet Download Manager v6.42\nBuild: Native Win32 C/C++\nHigh Speed Multi-Segmented Downloader\n\nDeveloped for Tafim.", L"About Tafim", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(hWnd, L"Tafim Internet Download Manager v2.0\nBuild: Native Win32 C/C++\nHigh Speed Multi-Segmented Downloader\n\nDeveloped for Tafim.", L"About Tafim", MB_OK | MB_ICONINFORMATION);
             break;
 
         case ID_MENU_REGISTRATION:

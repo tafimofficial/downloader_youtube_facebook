@@ -9,8 +9,8 @@ IDI_APP_ICON ICON "..\\res\\app.ico"
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 6,42,1,0
-PRODUCTVERSION 6,42,1,0
+FILEVERSION 2,0,0,0
+PRODUCTVERSION 2,0,0,0
 FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
 FILEFLAGS 0x1L
@@ -27,12 +27,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Tafim Software"
             VALUE "FileDescription", "Tafim Internet Download Manager"
-            VALUE "FileVersion", "6.42.1.0"
+            VALUE "FileVersion", "2.0.0.0"
             VALUE "InternalName", "Tafim"
             VALUE "LegalCopyright", "Copyright (C) 2026 Tafim Software. All rights reserved."
             VALUE "OriginalFilename", "Tafim.exe"
             VALUE "ProductName", "Tafim Internet Download Manager"
-            VALUE "ProductVersion", "6.42.1.0"
+            VALUE "ProductVersion", "2.0.0.0"
         END
     END
     BLOCK "VarFileInfo"

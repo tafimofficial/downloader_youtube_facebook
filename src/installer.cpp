@@ -275,7 +275,7 @@ static void PerformInstallation(HWND hWnd) {
     HKEY hUninstKey;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tafim", 0, NULL, 0, KEY_SET_VALUE, NULL, &hUninstKey, NULL) == ERROR_SUCCESS) {
         const wchar_t* dispName = L"Tafim Internet Download Manager";
-        const wchar_t* dispVer = L"6.42";
+        const wchar_t* dispVer = L"2.0";
         const wchar_t* pub = L"Tafim Software";
         RegSetValueExW(hUninstKey, L"DisplayName", 0, REG_SZ, (const BYTE*)dispName, (DWORD)((wcslen(dispName) + 1) * sizeof(wchar_t)));
         RegSetValueExW(hUninstKey, L"DisplayVersion", 0, REG_SZ, (const BYTE*)dispVer, (DWORD)((wcslen(dispVer) + 1) * sizeof(wchar_t)));
@@ -316,7 +316,7 @@ static LRESULT CALLBACK SetupWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
         g_hFontTitle = CreateFontW(-15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
         // Top Banner Text
-        HWND hTitle = CreateWindowExW(0, L"STATIC", L"Install Tafim Internet Download Manager 6.42",
+        HWND hTitle = CreateWindowExW(0, L"STATIC", L"Install Tafim Internet Download Manager 2.0",
             WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 16, 460, 24, hWnd, NULL, hInst, NULL);
         SendMessage(hTitle, WM_SETFONT, (WPARAM)g_hFontTitle, TRUE);
 
@@ -449,7 +449,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     HWND hWnd = CreateWindowExW(
         WS_EX_APPWINDOW,
         L"TafimSetupWnd",
-        L"Tafim Internet Download Manager Setup",
+        L"Tafim Internet Download Manager 2.0 Setup",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         x, y, winW, winH,
         NULL, NULL, hInstance, NULL
