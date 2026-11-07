@@ -371,6 +371,9 @@ void MainWindow::ShowContextMenuTray(POINT pt) {
 void MainWindow::SetAutoStart(bool enable) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hKey, L"TafimDownloadManager");
+        RegDeleteValueW(hKey, L"TafimDM");
+        RegDeleteValueW(hKey, L"IDM trial reset");
         if (enable) {
             wchar_t exePath[MAX_PATH];
             GetModuleFileNameW(NULL, exePath, MAX_PATH);
@@ -850,7 +853,7 @@ void MainWindow::RefreshListView() {
                 ListView_SetItemText(m_hListView, row, 2, (LPWSTR)sizeStr.c_str());
             }
 
-            std::wstring stStr = StatusToString(item->status, item->isMerging);
+            std::wstring stStr = StatusToString(item->status, item->isMerging, item->description);
             if (item->isMerging) {
                 stStr = L"Merging audio and video (DASH)...";
             } else if (item->status == DownloadStatus::Downloading) {
@@ -909,7 +912,7 @@ void MainWindow::RefreshListView() {
         std::wstring sizeStr = (item->totalBytes > 0) ? FormatFileSize(item->totalBytes) : L"0 Bytes";
         ListView_SetItemText(m_hListView, row, 2, (LPWSTR)sizeStr.c_str());
 
-        std::wstring stStr = StatusToString(item->status);
+        std::wstring stStr = StatusToString(item->status, item->isMerging, item->description);
         if (item->status == DownloadStatus::Downloading) {
             wchar_t buf[64];
             swprintf_s(buf, L"%.1f %%", item->GetPercent());

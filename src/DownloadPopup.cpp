@@ -365,7 +365,7 @@ void DownloadPopup::UpdateData() {
     SetTextIfChanged(m_hUrlText, m_item->url);
 
     // 3. Status
-    std::wstring stStr = StatusToString(m_item->status, m_item->isMerging);
+    std::wstring stStr = StatusToString(m_item->status, m_item->isMerging, m_item->description);
     if (m_item->isMerging) {
         stStr = L"Merging audio and video (DASH)...";
     }

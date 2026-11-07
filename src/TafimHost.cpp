@@ -67,28 +67,37 @@ static void LaunchTafimExe() {
 
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = { 0 };
-    std::wstring cmd = L"\"" + std::wstring(tafimExe) + L"\"";
+    std::wstring cmd = L"\"" + std::wstring(tafimExe) + L"\" /background";
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(0);
 
-    if (CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+    if (CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
 }
 
-int main() {
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!hStdIn || hStdIn == INVALID_HANDLE_VALUE || !hStdOut || hStdOut == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
 
     uint32_t length = 0;
-    if (fread(&length, 1, 4, stdin) != 4 || length == 0 || length > 1024 * 1024) {
+    DWORD bytesRead = 0;
+    if (!ReadFile(hStdIn, &length, 4, &bytesRead, NULL) || bytesRead != 4 || length == 0 || length > 1024 * 1024) {
         return 0;
     }
 
     std::string message(length, '\0');
-    if (fread(&message[0], 1, length, stdin) != length) {
-        return 0;
+    DWORD totalRead = 0;
+    while (totalRead < length) {
+        DWORD readNow = 0;
+        if (!ReadFile(hStdIn, &message[totalRead], length - totalRead, &readNow, NULL) || readNow == 0) {
+            return 0;
+        }
+        totalRead += readNow;
     }
 
     // 1. Try forwarding JSON message to running Tafim.exe HTTP API
@@ -109,9 +118,9 @@ int main() {
     // Send response back to Chrome Native Messaging
     std::string response = dispatched ? "{\"success\":true}" : "{\"success\":false}";
     uint32_t respLen = (uint32_t)response.length();
-    fwrite(&respLen, 1, 4, stdout);
-    fwrite(response.c_str(), 1, respLen, stdout);
-    fflush(stdout);
+    DWORD written = 0;
+    WriteFile(hStdOut, &respLen, 4, &written, NULL);
+    WriteFile(hStdOut, response.c_str(), respLen, &written, NULL);
 
     return 0;
 }

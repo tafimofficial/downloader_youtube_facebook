@@ -11,7 +11,7 @@ enum class DownloadStatus {
     Canceled
 };
 
-inline std::wstring StatusToString(DownloadStatus st, bool isMerging = false) {
+inline std::wstring StatusToString(DownloadStatus st, bool isMerging = false, const std::wstring& desc = L"") {
     if (isMerging) return L"Merging audio and video (DASH)...";
     switch (st) {
     case DownloadStatus::Queued: return L"Queued";
@@ -19,7 +19,11 @@ inline std::wstring StatusToString(DownloadStatus st, bool isMerging = false) {
     case DownloadStatus::Downloading: return L"Receiving data...";
     case DownloadStatus::Paused: return L"Paused";
     case DownloadStatus::Complete: return L"Complete";
-    case DownloadStatus::Error: return L"Error";
+    case DownloadStatus::Error:
+        if (!desc.empty() && desc.find(L"expired") != std::wstring::npos) {
+            return L"Address expired";
+        }
+        return L"Error";
     case DownloadStatus::Canceled: return L"Canceled";
     default: return L"Unknown";
     }

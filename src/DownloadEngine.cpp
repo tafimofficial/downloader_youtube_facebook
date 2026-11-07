@@ -137,6 +137,11 @@ static bool IsCloudOrProtectedUrl(const std::wstring& url) {
     std::wstring u = url;
     std::transform(u.begin(), u.end(), u.begin(), ::towlower);
     return IsGoogleDriveUrl(url) ||
+           u.find(L"takeout.google.com") != std::wstring::npos ||
+           u.find(L"takeout-download.usercontent.google.com") != std::wstring::npos ||
+           u.find(L"video-downloads.googleusercontent.com") != std::wstring::npos ||
+           u.find(L"googleusercontent.com") != std::wstring::npos ||
+           u.find(L"storage.googleapis.com") != std::wstring::npos ||
            u.find(L"oaiusercontent.com") != std::wstring::npos ||
            u.find(L"chatgpt.com") != std::wstring::npos ||
            u.find(L"dropbox.com") != std::wstring::npos ||
@@ -1368,40 +1373,56 @@ private:
                 }
             }
 
-            // Check for Google Drive virus warning in HTML
+            // Check for Google Drive virus warning in HTML or expired session
             wchar_t ctHeader[256] = { 0 };
             DWORD ctSize = sizeof(ctHeader);
             if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_TYPE, WINHTTP_HEADER_NAME_BY_INDEX, ctHeader, &ctSize, WINHTTP_NO_HEADER_INDEX)) {
                 std::wstring ct = ctHeader;
                 std::transform(ct.begin(), ct.end(), ct.begin(), ::towlower);
-                if (ct.find(L"text/html") != std::wstring::npos && IsGoogleDriveUrl(fetchUrl)) {
-                    std::vector<char> htmlBuf(16384, 0);
-                    DWORD readHtml = 0;
-                    WinHttpReadData(hRequest, htmlBuf.data(), 16383, &readHtml);
-                    std::string htmlStr(htmlBuf.data(), readHtml);
+                if (ct.find(L"text/html") != std::wstring::npos) {
+                    if (IsGoogleDriveUrl(fetchUrl)) {
+                        std::vector<char> htmlBuf(16384, 0);
+                        DWORD readHtml = 0;
+                        WinHttpReadData(hRequest, htmlBuf.data(), 16383, &readHtml);
+                        std::string htmlStr(htmlBuf.data(), readHtml);
 
-                    std::string confirmToken = "";
-                    size_t confPos = htmlStr.find("confirm=");
-                    if (confPos != std::wstring::npos) {
-                        size_t valStart = confPos + 8;
-                        size_t valEnd = htmlStr.find_first_of("&\"' \r\n", valStart);
-                        confirmToken = (valEnd == std::wstring::npos) ? htmlStr.substr(valStart) : htmlStr.substr(valStart, valEnd - valStart);
-                    }
-                    if (confirmToken.empty() && htmlStr.find("download_warning") != std::string::npos) {
-                        confirmToken = "t";
-                    }
-
-                    if (!confirmToken.empty()) {
-                        if (fetchUrl.find(L"confirm=") == std::wstring::npos) {
-                            wchar_t wtok[128];
-                            MultiByteToWideChar(CP_UTF8, 0, confirmToken.c_str(), -1, wtok, 128);
-                            fetchUrl += (fetchUrl.find(L'?') == std::wstring::npos ? L"?" : L"&");
-                            fetchUrl += L"confirm=";
-                            fetchUrl += wtok;
+                        std::string confirmToken = "";
+                        size_t confPos = htmlStr.find("confirm=");
+                        if (confPos != std::wstring::npos) {
+                            size_t valStart = confPos + 8;
+                            size_t valEnd = htmlStr.find_first_of("&\"' \r\n", valStart);
+                            confirmToken = (valEnd == std::wstring::npos) ? htmlStr.substr(valStart) : htmlStr.substr(valStart, valEnd - valStart);
                         }
+                        if (confirmToken.empty() && htmlStr.find("download_warning") != std::string::npos) {
+                            confirmToken = "t";
+                        }
+
+                        if (!confirmToken.empty()) {
+                            if (fetchUrl.find(L"confirm=") == std::wstring::npos) {
+                                wchar_t wtok[128];
+                                MultiByteToWideChar(CP_UTF8, 0, confirmToken.c_str(), -1, wtok, 128);
+                                fetchUrl += (fetchUrl.find(L'?') == std::wstring::npos ? L"?" : L"&");
+                                fetchUrl += L"confirm=";
+                                fetchUrl += wtok;
+                            }
+                            WinHttpCloseHandle(hRequest);
+                            WinHttpCloseHandle(hConnect);
+                            continue;
+                        }
+                    } else if (m_item->totalBytes > 5 * 1024 * 1024 ||
+                               fetchUrl.find(L"accounts.google.com") != std::wstring::npos ||
+                               fetchUrl.find(L"/signin/") != std::wstring::npos ||
+                               (m_item->fileName.find(L".zip") != std::wstring::npos ||
+                                m_item->fileName.find(L".rar") != std::wstring::npos ||
+                                m_item->fileName.find(L".iso") != std::wstring::npos ||
+                                m_item->fileName.find(L".bin") != std::wstring::npos ||
+                                m_item->fileName.find(L".exe") != std::wstring::npos ||
+                                m_item->fileName.find(L".mp4") != std::wstring::npos ||
+                                m_item->fileName.find(L".mkv") != std::wstring::npos)) {
+                        m_item->description = L"Address expired. Right-click -> Refresh Download Address";
                         WinHttpCloseHandle(hRequest);
                         WinHttpCloseHandle(hConnect);
-                        continue;
+                        break;
                     }
                 }
             }
@@ -1440,6 +1461,18 @@ private:
 
         WinHttpCloseHandle(hSession);
 
+        if (m_item->description.find(L"expired") != std::wstring::npos) {
+            m_item->status = DownloadStatus::Error;
+            m_item->speedBytesPerSec = 0;
+            m_item->timeLeftSec = 0;
+            if (m_callback) {
+                m_callback->OnProgress(m_item->id);
+                m_callback->OnFinished(m_item->id, false, m_item->description);
+            }
+            m_isRunning = false;
+            return;
+        }
+
         // YouTube clen parameter fallback
         if (totalLength == 0) {
             size_t clenPos = fetchUrl.find(L"clen=");
@@ -1454,7 +1487,9 @@ private:
         }
 
         m_item->url = fetchUrl;
-        m_item->totalBytes = totalLength;
+        if (totalLength > 0) {
+            m_item->totalBytes = totalLength;
+        }
         m_item->resumeCapable = supportsRanges;
 
         // Ensure target directory exists
@@ -1467,6 +1502,11 @@ private:
         int numConns = 1;
         if (!IsCloudOrProtectedUrl(fetchUrl) && !IsGoogleVideoUrl(fetchUrl) && supportsRanges && totalLength > 1024 * 1024) {
             numConns = m_item->numConnections > 0 ? m_item->numConnections : 8;
+        } else if (IsCloudOrProtectedUrl(fetchUrl) && supportsRanges && totalLength > 1024 * 1024) {
+            // For cloud/Google Takeout/Drive storage with range support, limit to 2-4 stable parallel connections max
+            // to avoid server-side concurrency drops and IP throttling
+            int userChoice = m_item->numConnections > 0 ? m_item->numConnections : 8;
+            numConns = (userChoice > 4) ? 4 : (userChoice < 2 ? 1 : 2);
         }
 
         // If single stream is selected, use DownloadSingleStreamDirect directly for 100% rock-solid reliability
@@ -1563,157 +1603,192 @@ private:
         m_item->status = DownloadStatus::Downloading;
         if (m_callback) m_callback->OnStatusChange(m_item->id, DownloadStatus::Downloading);
 
-        // Spawn connection worker threads ONLY for incomplete chunks!
-        m_workerThreads.clear();
-        for (int i = 0; i < (int)m_item->connections.size(); i++) {
-            uint64_t segLen = (m_item->connections[i].endByte >= m_item->connections[i].startByte) ?
-                (m_item->connections[i].endByte - m_item->connections[i].startByte + 1) : 0;
-            if (segLen > 0 && m_item->connections[i].downloadedBytes >= segLen) {
-                m_item->connections[i].status = L"Complete";
-                continue; // Chunk is already 100% finished, skip!
-            }
-            m_workerThreads.emplace_back(&DownloadTask::WorkerThread, this, i, finalHost, finalPort, finalPath, finalFlags, fullFilePath);
-        }
-
-        // Speed & progress monitor loop with Dynamic Segment Splitting
-        auto lastTime = std::chrono::steady_clock::now();
-        auto lastSplitTime = std::chrono::steady_clock::now();
-        uint64_t lastDownloaded = 0;
+        // Robust Outer Auto-Recovery Loop (Auto-reconnects on network interruptions)
+        int outerRetries = 0;
+        const int maxOuterRetries = 15;
 
         while (m_isRunning && !m_isPaused && !m_isCanceled) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            // Allocate 1 thread slot per connection
+            m_workerThreads.clear();
+            m_workerThreads.resize(m_item->connections.size());
 
-            uint64_t currentDownloaded = 0;
-            bool allComplete = true;
-            bool anyWorkerRunning = false;
-
-            for (size_t i = 0; i < m_item->connections.size(); i++) {
-                currentDownloaded += m_item->connections[i].downloadedBytes;
+            // Spawn connection worker threads ONLY for incomplete chunks!
+            for (int i = 0; i < (int)m_item->connections.size(); i++) {
                 uint64_t segLen = (m_item->connections[i].endByte >= m_item->connections[i].startByte) ?
                     (m_item->connections[i].endByte - m_item->connections[i].startByte + 1) : 0;
-
-                bool isChunkDone = (segLen > 0 && m_item->connections[i].downloadedBytes >= segLen) || (m_item->connections[i].status == L"Complete");
-                if (!isChunkDone) {
-                    allComplete = false;
-                    const std::wstring& st = m_item->connections[i].status;
-                    if (st == L"Connecting..." || st == L"Send GET..." || st == L"Receiving data..." ||
-                        st.find(L"Retrying") != std::wstring::npos || st.find(L"Split") != std::wstring::npos || st.find(L"Reconnecting") != std::wstring::npos) {
-                        anyWorkerRunning = true;
-                    }
+                if (segLen > 0 && m_item->connections[i].downloadedBytes >= segLen) {
+                    m_item->connections[i].status = L"Complete";
+                    continue; // Chunk is already 100% finished, skip!
                 }
+                m_item->connections[i].status = L"Connecting...";
+                m_workerThreads[i] = std::thread(&DownloadTask::WorkerThread, this, i, finalHost, finalPort, finalPath, finalFlags, fullFilePath);
             }
 
-            m_item->downloadedBytes = currentDownloaded;
+            // Speed & progress monitor loop with Dynamic Segment Splitting
+            auto lastTime = std::chrono::steady_clock::now();
+            auto lastSplitTime = std::chrono::steady_clock::now();
+            uint64_t lastDownloaded = 0;
 
-            auto now = std::chrono::steady_clock::now();
-            double elapsed = std::chrono::duration<double>(now - lastTime).count();
-            if (elapsed >= 0.5) {
-                double speed = (double)(currentDownloaded - lastDownloaded) / elapsed;
-                m_item->speedBytesPerSec = (m_item->speedBytesPerSec * 0.7) + (speed * 0.3); // Smoothed
-                if (m_item->speedBytesPerSec > 1.0 && m_item->totalBytes > currentDownloaded) {
-                    m_item->timeLeftSec = (double)(m_item->totalBytes - currentDownloaded) / m_item->speedBytesPerSec;
-                } else {
-                    m_item->timeLeftSec = 0.0;
-                }
-                lastDownloaded = currentDownloaded;
-                lastTime = now;
-            }
+            while (m_isRunning && !m_isPaused && !m_isCanceled) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-            if (m_callback) m_callback->OnProgress(m_item->id);
+                uint64_t currentDownloaded = 0;
+                bool allComplete = true;
+                bool anyWorkerRunning = false;
 
-            // If all chunks completed, break
-            if (allComplete || (totalLength > 0 && currentDownloaded >= totalLength)) {
-                if (m_item->totalBytes == 0 && currentDownloaded > 0) {
-                    m_item->totalBytes = currentDownloaded;
-                }
-                break;
-            }
-
-            // Dynamic Segment Splitting:
-            // When one connection finishes its chunk and another connection has >= 4MB remaining,
-            // split the largest active connection in half so idle connection helps download it!
-            double sinceLastSplit = std::chrono::duration<double>(now - lastSplitTime).count();
-            if (sinceLastSplit >= 1.5 && supportsRanges && totalLength > 0 && !m_isPaused && !m_isCanceled) {
-                int idleIdx = -1;
                 for (size_t i = 0; i < m_item->connections.size(); i++) {
+                    currentDownloaded += m_item->connections[i].downloadedBytes;
                     uint64_t segLen = (m_item->connections[i].endByte >= m_item->connections[i].startByte) ?
                         (m_item->connections[i].endByte - m_item->connections[i].startByte + 1) : 0;
-                    if (m_item->connections[i].status == L"Complete" || (segLen > 0 && m_item->connections[i].downloadedBytes >= segLen)) {
-                        idleIdx = (int)i;
-                        break;
+
+                    bool isChunkDone = (segLen > 0 && m_item->connections[i].downloadedBytes >= segLen) || (m_item->connections[i].status == L"Complete");
+                    if (!isChunkDone) {
+                        allComplete = false;
+                        const std::wstring& st = m_item->connections[i].status;
+                        if (st == L"Connecting..." || st == L"Send GET..." || st == L"Receiving data..." ||
+                            st.find(L"Retrying") != std::wstring::npos || st.find(L"Split") != std::wstring::npos || st.find(L"Reconnecting") != std::wstring::npos) {
+                            anyWorkerRunning = true;
+                        }
                     }
                 }
 
-                if (idleIdx != -1) {
-                    int largestIdx = -1;
-                    uint64_t maxRemaining = 0;
+                m_item->downloadedBytes = currentDownloaded;
+
+                auto now = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(now - lastTime).count();
+                if (elapsed >= 0.5) {
+                    double speed = (double)(currentDownloaded - lastDownloaded) / elapsed;
+                    m_item->speedBytesPerSec = (m_item->speedBytesPerSec * 0.7) + (speed * 0.3); // Smoothed
+                    if (m_item->speedBytesPerSec > 1.0 && m_item->totalBytes > currentDownloaded) {
+                        m_item->timeLeftSec = (double)(m_item->totalBytes - currentDownloaded) / m_item->speedBytesPerSec;
+                    } else {
+                        m_item->timeLeftSec = 0.0;
+                    }
+                    lastDownloaded = currentDownloaded;
+                    lastTime = now;
+                }
+
+                if (m_callback) m_callback->OnProgress(m_item->id);
+
+                // If all chunks completed, break
+                if (allComplete || (totalLength > 0 && currentDownloaded >= totalLength)) {
+                    if (m_item->totalBytes == 0 && currentDownloaded > 0) {
+                        m_item->totalBytes = currentDownloaded;
+                    }
+                    break;
+                }
+
+                // Dynamic Segment Splitting: only for non-cloud safe URLs with 10s cooldown and min 32MB remaining
+                double sinceLastSplit = std::chrono::duration<double>(now - lastSplitTime).count();
+                if (sinceLastSplit >= 10.0 && supportsRanges && totalLength > 0 && !m_isPaused && !m_isCanceled && !IsCloudOrProtectedUrl(fetchUrl)) {
+                    int idleIdx = -1;
                     for (size_t i = 0; i < m_item->connections.size(); i++) {
-                        if ((int)i == idleIdx) continue;
-                        if (m_item->connections[i].status == L"Receiving data...") {
-                            uint64_t curPos = m_item->connections[i].startByte + m_item->connections[i].downloadedBytes;
-                            if (m_item->connections[i].endByte > curPos) {
-                                uint64_t rem = m_item->connections[i].endByte - curPos + 1;
-                                if (rem > maxRemaining) {
-                                    maxRemaining = rem;
-                                    largestIdx = (int)i;
-                                }
-                            }
+                        uint64_t segLen = (m_item->connections[i].endByte >= m_item->connections[i].startByte) ?
+                            (m_item->connections[i].endByte - m_item->connections[i].startByte + 1) : 0;
+                        if (m_item->connections[i].status == L"Complete" || (segLen > 0 && m_item->connections[i].downloadedBytes >= segLen)) {
+                            idleIdx = (int)i;
+                            break;
                         }
                     }
 
-                    // Only split if at least 4 MB remains to be downloaded in that chunk
-                    if (largestIdx != -1 && maxRemaining >= 4ULL * 1024ULL * 1024ULL) {
-                        uint64_t curPos = m_item->connections[largestIdx].startByte + m_item->connections[largestIdx].downloadedBytes;
-                        uint64_t half = maxRemaining / 2;
-                        uint64_t splitPos = curPos + half;
-                        uint64_t origEnd = m_item->connections[largestIdx].endByte;
+                    if (idleIdx != -1) {
+                        int largestIdx = -1;
+                        uint64_t maxRemaining = 0;
+                        for (size_t i = 0; i < m_item->connections.size(); i++) {
+                            if ((int)i == idleIdx) continue;
+                            if (m_item->connections[i].status == L"Receiving data...") {
+                                uint64_t curPos = m_item->connections[i].startByte + m_item->connections[i].downloadedBytes;
+                                if (m_item->connections[i].endByte > curPos) {
+                                    uint64_t rem = m_item->connections[i].endByte - curPos + 1;
+                                    if (rem > maxRemaining) {
+                                        maxRemaining = rem;
+                                        largestIdx = (int)i;
+                                    }
+                                }
+                            }
+                        }
 
-                        // Shorten largest worker's end
-                        m_item->connections[largestIdx].endByte = splitPos - 1;
+                        uint64_t minSplitBytes = (totalLength > 500ULL * 1024ULL * 1024ULL) ? (32ULL * 1024ULL * 1024ULL) : (4ULL * 1024ULL * 1024ULL);
+                        if (largestIdx != -1 && maxRemaining >= minSplitBytes) {
+                            uint64_t curPos = m_item->connections[largestIdx].startByte + m_item->connections[largestIdx].downloadedBytes;
+                            uint64_t half = maxRemaining / 2;
+                            uint64_t splitPos = curPos + half;
+                            uint64_t origEnd = m_item->connections[largestIdx].endByte;
 
-                        // Assign idle worker to second half
-                        m_item->connections[idleIdx].startByte = splitPos;
-                        m_item->connections[idleIdx].endByte = origEnd;
-                        m_item->connections[idleIdx].downloadedBytes = 0;
-                        m_item->connections[idleIdx].status = L"Connecting (Split)...";
+                            // Shorten largest worker's end
+                            m_item->connections[largestIdx].endByte = splitPos - 1;
 
-                        lastSplitTime = now;
-                        anyWorkerRunning = true;
+                            // Assign idle worker to second half
+                            m_item->connections[idleIdx].startByte = splitPos;
+                            m_item->connections[idleIdx].endByte = origEnd;
+                            m_item->connections[idleIdx].downloadedBytes = 0;
+                            m_item->connections[idleIdx].status = L"Connecting (Split)...";
 
-                        m_workerThreads.emplace_back(&DownloadTask::WorkerThread, this, idleIdx, finalHost, finalPort, finalPath, finalFlags, fullFilePath);
+                            lastSplitTime = now;
+                            anyWorkerRunning = true;
+
+                            if (idleIdx < (int)m_workerThreads.size() && m_workerThreads[idleIdx].joinable()) {
+                                m_workerThreads[idleIdx].join();
+                            }
+                            m_workerThreads[idleIdx] = std::thread(&DownloadTask::WorkerThread, this, idleIdx, finalHost, finalPort, finalPath, finalFlags, fullFilePath);
+                        }
                     }
                 }
-            }
 
-            // If all worker threads have finished (or failed)
-            if (!anyWorkerRunning) {
-                break;
-            }
-        }
-
-        // Wait for workers to finish
-        for (auto& t : m_workerThreads) {
-            if (t.joinable()) t.join();
-        }
-        m_workerThreads.clear();
-
-        // If some chunks remain incomplete (e.g. server concurrency limit like dlproxy),
-        // try finishing incomplete chunks sequentially one-by-one!
-        if (!m_isPaused && !m_isCanceled && (totalLength == 0 || m_item->downloadedBytes < totalLength)) {
-            for (size_t i = 0; i < m_item->connections.size() && !m_isPaused && !m_isCanceled; i++) {
-                auto& conn = m_item->connections[i];
-                uint64_t segLen = (conn.endByte >= conn.startByte) ? (conn.endByte - conn.startByte + 1) : 0;
-                if (segLen > 0 && conn.downloadedBytes < segLen) {
-                    conn.status = L"Connecting (Sequential retry)...";
-                    if (m_callback) m_callback->OnProgress(m_item->id);
-                    WorkerThread((int)i, finalHost, finalPort, finalPath, finalFlags, fullFilePath);
-
-                    uint64_t curDl = 0;
-                    for (const auto& c : m_item->connections) curDl += c.downloadedBytes;
-                    m_item->downloadedBytes = curDl;
-                    if (m_callback) m_callback->OnProgress(m_item->id);
+                if (!anyWorkerRunning) {
+                    break;
                 }
             }
+
+            // Wait for workers to finish current cycle
+            for (auto& t : m_workerThreads) {
+                if (t.joinable()) t.join();
+            }
+
+            // Check completion status
+            bool allSegmentsComplete = true;
+            bool addressExpired = false;
+            for (const auto& conn : m_item->connections) {
+                uint64_t segLen = (conn.endByte >= conn.startByte) ? (conn.endByte - conn.startByte + 1) : 0;
+                if (segLen > 0 && conn.downloadedBytes < segLen) {
+                    allSegmentsComplete = false;
+                }
+                if (conn.status == L"Address expired" || conn.status == L"HTTP 401" || conn.status == L"HTTP 403") {
+                    addressExpired = true;
+                }
+            }
+
+            if (allSegmentsComplete || (totalLength > 0 && m_item->downloadedBytes >= totalLength)) {
+                break; // 100% finished!
+            }
+
+            if (m_isPaused || m_isCanceled) {
+                break;
+            }
+
+            if (addressExpired) {
+                m_item->description = L"Address expired. Right-click -> Refresh Download Address";
+                break;
+            }
+
+            // Auto-recovery countdown: automatically reconnects on transient network drops
+            if (outerRetries < maxOuterRetries && !m_isPaused && !m_isCanceled) {
+                outerRetries++;
+                for (int sec = 3; sec > 0 && !m_isPaused && !m_isCanceled; sec--) {
+                    for (auto& c : m_item->connections) {
+                        uint64_t segLen = (c.endByte >= c.startByte) ? (c.endByte - c.startByte + 1) : 0;
+                        if (segLen > 0 && c.downloadedBytes < segLen) {
+                            c.status = L"Reconnecting in " + std::to_wstring(sec) + L"s (Attempt " + std::to_wstring(outerRetries) + L"/" + std::to_wstring(maxOuterRetries) + L")...";
+                        }
+                    }
+                    if (m_callback) m_callback->OnProgress(m_item->id);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+                if (m_isPaused || m_isCanceled) break;
+                continue;
+            }
+
+            break;
         }
 
         // Final tally
@@ -1746,9 +1821,12 @@ private:
             m_item->status = DownloadStatus::Error;
             m_item->speedBytesPerSec = 0;
             m_item->timeLeftSec = 0;
+            if (m_item->description.empty() || m_item->description.find(L"expired") == std::wstring::npos) {
+                m_item->description = L"Network disconnected or server closed (Right-click -> Refresh or Resume)";
+            }
             if (m_callback) {
                 m_callback->OnProgress(m_item->id);
-                m_callback->OnFinished(m_item->id, false, L"Transfer incomplete or server connection closed (Right-click to refresh address or resume)");
+                m_callback->OnFinished(m_item->id, false, m_item->description);
             }
         }
 
@@ -1884,6 +1962,14 @@ private:
                 continue;
             }
 
+            if (statusCode == 401 || statusCode == 403) {
+                conn.status = L"Address expired";
+                WinHttpCloseHandle(hRequest);
+                WinHttpCloseHandle(hConnect);
+                WinHttpCloseHandle(hSession);
+                return;
+            }
+
             if (statusCode != 200 && statusCode != 206) {
                 wchar_t stBuf[64];
                 swprintf_s(stBuf, L"HTTP %u", statusCode);
@@ -1891,12 +1977,27 @@ private:
                 WinHttpCloseHandle(hRequest);
                 WinHttpCloseHandle(hConnect);
                 WinHttpCloseHandle(hSession);
-                // If it's a 5xx server error, retry; if 4xx (e.g. 400 link expired or range rejected), don't loop endlessly
-                if (statusCode >= 500 && attempt < maxRetries && !m_isPaused && !m_isCanceled) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+                // If it's 429 (rate-limit) or 5xx server error, retry with backoff; if 4xx, don't loop endlessly
+                if ((statusCode == 429 || statusCode >= 500) && attempt < maxRetries && !m_isPaused && !m_isCanceled) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1500 * attempt));
                     continue;
                 }
                 return;
+            }
+
+            // Check Content-Type for HTML signin/error pages
+            wchar_t ctBuf[256] = { 0 };
+            DWORD ctLen = sizeof(ctBuf);
+            if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_TYPE, WINHTTP_HEADER_NAME_BY_INDEX, ctBuf, &ctLen, WINHTTP_NO_HEADER_INDEX)) {
+                std::wstring ct = ctBuf;
+                std::transform(ct.begin(), ct.end(), ct.begin(), ::towlower);
+                if (ct.find(L"text/html") != std::wstring::npos && (m_item->totalBytes > 5 * 1024 * 1024 || m_item->fileName.find(L".zip") != std::wstring::npos)) {
+                    conn.status = L"Address expired";
+                    WinHttpCloseHandle(hRequest);
+                    WinHttpCloseHandle(hConnect);
+                    WinHttpCloseHandle(hSession);
+                    return;
+                }
             }
 
             if (statusCode == 200 && conn.startByte > 0) {
@@ -2231,6 +2332,15 @@ bool DownloadEngine::UpdateDownloadUrl(int downloadId, const std::wstring& newUr
     if (item->status == DownloadStatus::Error) {
         item->status = DownloadStatus::Paused;
     }
+    item->description = L"";
+    for (auto& conn : item->connections) {
+        uint64_t segLen = (conn.endByte >= conn.startByte) ? (conn.endByte - conn.startByte + 1) : 0;
+        if (segLen > 0 && conn.downloadedBytes >= segLen) {
+            conn.status = L"Complete";
+        } else {
+            conn.status = L"Paused";
+        }
+    }
     SaveDownloads();
     return true;
 }
@@ -2297,6 +2407,16 @@ void DownloadEngine::SaveDownloads() {
             statusVal = (int)DownloadStatus::Paused;
         }
 
+        std::wstring connStr;
+        for (size_t c = 0; c < item->connections.size(); c++) {
+            if (c > 0) connStr += L";";
+            const auto& ci = item->connections[c];
+            connStr += std::to_wstring(ci.id) + L"," +
+                       std::to_wstring(ci.startByte) + L"," +
+                       std::to_wstring(ci.endByte) + L"," +
+                       std::to_wstring(ci.downloadedBytes);
+        }
+
         std::wstringstream ss;
         ss << item->id << L"\t"
            << EscapeField(item->url) << L"\t"
@@ -2311,7 +2431,8 @@ void DownloadEngine::SaveDownloads() {
            << item->downloadedBytes << L"\t"
            << statusVal << L"\t"
            << EscapeField(item->dateAdded) << L"\t"
-           << EscapeField(item->lastTryDate) << L"\r\n";
+           << EscapeField(item->lastTryDate) << L"\t"
+           << EscapeField(connStr) << L"\r\n";
         content += ss.str();
     }
 
@@ -2391,6 +2512,37 @@ void DownloadEngine::LoadDownloads() {
             item->status = (DownloadStatus)statusInt;
             item->dateAdded = UnescapeField(tokens[12]);
             item->lastTryDate = UnescapeField(tokens[13]);
+
+            if (tokens.size() >= 15) {
+                std::wstring connStr = UnescapeField(tokens[14]);
+                if (!connStr.empty()) {
+                    std::wstringstream css(connStr);
+                    std::wstring chunk;
+                    while (std::getline(css, chunk, L';')) {
+                        if (chunk.empty()) continue;
+                        std::wstringstream chunkSS(chunk);
+                        std::wstring part;
+                        std::vector<std::wstring> parts;
+                        while (std::getline(chunkSS, part, L',')) {
+                            parts.push_back(part);
+                        }
+                        if (parts.size() >= 4) {
+                            ConnectionInfo ci;
+                            ci.id = _wtoi(parts[0].c_str());
+                            ci.startByte = _wcstoui64(parts[1].c_str(), NULL, 10);
+                            ci.endByte = _wcstoui64(parts[2].c_str(), NULL, 10);
+                            ci.downloadedBytes = _wcstoui64(parts[3].c_str(), NULL, 10);
+                            uint64_t segLen = (ci.endByte >= ci.startByte) ? (ci.endByte - ci.startByte + 1) : 0;
+                            if (segLen > 0 && ci.downloadedBytes >= segLen) {
+                                ci.status = L"Complete";
+                            } else {
+                                ci.status = L"Paused";
+                            }
+                            item->connections.push_back(ci);
+                        }
+                    }
+                }
+            }
 
             if (item->id > maxId) maxId = item->id;
             m_items.push_back(item);

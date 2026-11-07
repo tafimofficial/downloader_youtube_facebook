@@ -262,11 +262,16 @@ static void PerformInstallation(HWND hWnd) {
     }
 
     // 7. Registry Run Key (Auto-start on PC boot)
-    if (autostart) {
+    {
         HKEY hRunKey;
         if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hRunKey) == ERROR_SUCCESS) {
-            std::wstring runCmd = L"\"" + std::wstring(dstTafim) + L"\" /background";
-            RegSetValueExW(hRunKey, L"Tafim", 0, REG_SZ, (const BYTE*)runCmd.c_str(), (DWORD)((runCmd.length() + 1) * sizeof(wchar_t)));
+            RegDeleteValueW(hRunKey, L"TafimDownloadManager");
+            RegDeleteValueW(hRunKey, L"TafimDM");
+            RegDeleteValueW(hRunKey, L"IDM trial reset");
+            if (autostart) {
+                std::wstring runCmd = L"\"" + std::wstring(dstTafim) + L"\" /background";
+                RegSetValueExW(hRunKey, L"Tafim", 0, REG_SZ, (const BYTE*)runCmd.c_str(), (DWORD)((runCmd.length() + 1) * sizeof(wchar_t)));
+            }
             RegCloseKey(hRunKey);
         }
     }

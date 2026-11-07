@@ -43,7 +43,7 @@ cl.exe /O2 /Oi /GL /MD /EHsc /utf-8 /std:c++17 /W3 /DUNICODE /D_UNICODE /I src ^
     /Fo:build\ ^
     src\TafimHost.cpp ^
     /Fe:build\TafimHost.exe ^
-    /link /SUBSYSTEM:CONSOLE /LTCG /OPT:REF /OPT:ICF ^
+    /link /SUBSYSTEM:WINDOWS /LTCG /OPT:REF /OPT:ICF ^
     user32.lib shell32.lib shlwapi.lib winhttp.lib
 
 if errorlevel 1 goto error
